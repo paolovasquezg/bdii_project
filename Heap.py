@@ -65,21 +65,6 @@ class HeapFile:
                     
         return records
 
-    def search_by_position(self, positions: list):
-        
-        with open(self.filename) as heapfile:
-
-            records = []
-
-            for pos in positions:
-                heapfile.seek(pos)
-                data = heapfile.read(self.REC_SIZE)
-                record = Record.unpack(data, self.format, self.schema)
-
-                records.append(record.fields)
-        
-        return records
-
     def range_search(self, additional: dict):
         with open(self.filename, "rb") as heapfile:
             schema_size = struct.unpack("I", heapfile.read(4))[0]

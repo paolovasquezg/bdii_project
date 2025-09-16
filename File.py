@@ -133,20 +133,6 @@ class File:
                 self.p_print("b+", additional, filename) 
             else:
                 self.p_print("rtree", additional, filename) 
-
-            if (mainindx == "heap"):
-                SearchFile = HeapFile(mainfilename)
-                records = SearchFile.search_by_position(records)
-            elif (mainindx  == "sequential"):
-                self.p_print("seq", records, mainfilename) 
-            elif (mainindx == "isam"):
-                self.p_print("isam", records, mainfilename) 
-            elif (mainindx  == "hash"):
-                self.p_print("hash", records, mainfilename)
-            elif (mainindx == "b+"):
-                self.p_print("b+", records, mainfilename)
-            else:
-                self.p_print("rtree", records, mainfilename)
         
         return records
     
@@ -209,21 +195,6 @@ class File:
                 additional["r"] = params["r"]
                 self.p_print("rtree", additional, filename)
         
-
-            if (mainindx == "heap"):
-                SearchFile = HeapFile(mainfilename)
-                records = SearchFile.search_by_position(records)
-            elif (mainindx  == "sequential"):
-                self.p_print("seq", records, mainfilename)
-            elif (mainindx == "isam"):
-                self.p_print("isam", records, mainfilename)
-            elif (mainindx  == "hash"):
-                self.p_print("hash", records, mainfilename)
-            elif (mainindx == "b+"):
-                self.p_print("b+", records, mainfilename)
-            else:
-                self.p_print("rtree", records, mainfilename)
-
         return records
     
     def knn(self, params: dict):
@@ -247,11 +218,6 @@ class File:
             
             filename = self.indexes[field]["filename"]
             self.p_print("rtree", additional, filename)
-            
-            if (mainindx  == "hash"):
-                self.p_print("hash", records, mainfilename)
-            else:
-                self.p_print("b+", records, mainfilename)
         
         return records
     
