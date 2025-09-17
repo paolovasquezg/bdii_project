@@ -3,6 +3,10 @@ from Record import Record
 from Heap import HeapFile
 import os
 
+# >>>>>> NUEVO: import del R-Tree
+from indexes.rtree.RTree import RTreeFile
+# <<<<<<
+
 class File:
 
     def __init__(self, table: str):
@@ -50,6 +54,7 @@ class File:
         elif (maindex == "b+"):
             self.p_print("b+", record, additional, mainfilename) 
         else:
+            
             self.p_print("rtree", record, additional, mainfilename) 
             
         if len(record) >= 1:
@@ -80,7 +85,17 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
                     else:
-                        self.p_print("rtree", new_record,additional,filename) 
+                        
+                        try:
+                            rtree = RTreeFile(filename)
+                            rtree.open()
+                            rtree.insert(new_record, {"key": index})
+                            rtree.close()
+                        except Exception as e:
+                            # si algo falla, mantén el log anterior
+                            self.p_print("rtree", new_record,additional,filename)
+                            self.p_print("rtree_error", {"error": str(e)}, additional, filename)
+                        # <<<<<<
     
     def search(self, params: dict): 
         field = params["field"]
@@ -107,7 +122,6 @@ class File:
         
         if mainindex:
 
-
             if (mainindx == "heap"):
                 SearchFile = HeapFile(mainfilename)
                 records = SearchFile.search(additional)
@@ -120,6 +134,7 @@ class File:
             elif (mainindx == "b+"):
                 self.p_print("b+", additional, mainfilename) 
             else:
+                
                 self.p_print("rtree", additional, mainfilename) 
         
         else:
@@ -132,6 +147,7 @@ class File:
             elif (indx == "b+"):
                 self.p_print("b+", additional, filename) 
             else:
+                
                 self.p_print("rtree", additional, filename) 
         
         return records
@@ -175,9 +191,19 @@ class File:
                 additional["max"] = params["max"]
                 self.p_print("b+", additional, mainfilename)
             else:
-                additional["point"] = params["point"]
-                additional["r"] = params["r"]
-                self.p_print("rtree", additional, mainfilename)
+                
+                try:
+                    rtree = RTreeFile(mainfilename)
+                    rtree.open()
+                    records = rtree.range_search({
+                        "point": params["point"],
+                        "radio": params["r"],
+                        "heap": mainfilename
+                    })
+                    rtree.close()
+                except Exception as e:
+                    self.p_print("rtree", {"error": str(e)}, mainfilename, mainfilename)
+                
         
         else:
             
@@ -191,9 +217,19 @@ class File:
                 additional["max"] = params["max"]
                 self.p_print("b+", additional, filename)
             else:
-                additional["point"] = params["point"]
-                additional["r"] = params["r"]
-                self.p_print("rtree", additional, filename)
+                
+                try:
+                    rtree = RTreeFile(filename)
+                    rtree.open()
+                    records = rtree.range_search({
+                        "point": params["point"],
+                        "radio": params["r"],
+                        "heap": mainfilename
+                    })
+                    rtree.close()
+                except Exception as e:
+                    self.p_print("rtree", {"error": str(e)}, filename, filename)
+                
         
         return records
     
@@ -213,11 +249,33 @@ class File:
             return []
         
         if mainindex:
-            self.p_print("rtree", additional, mainfilename)
+            
+            try:
+                rtree = RTreeFile(mainfilename)
+                rtree.open()
+                records = rtree.knn({
+                    "point": params["point"],
+                    "k": params["k"],
+                    "heap": mainfilename
+                })
+                rtree.close()
+            except Exception as e:
+                self.p_print("rtree", {"error": str(e)}, mainfilename, mainfilename)
         else:
             
             filename = self.indexes[field]["filename"]
-            self.p_print("rtree", additional, filename)
+            
+            try:
+                rtree = RTreeFile(filename)
+                rtree.open()
+                records = rtree.knn({
+                    "point": params["point"],
+                    "k": params["k"],
+                    "heap": mainfilename
+                })
+                rtree.close()
+            except Exception as e:
+                self.p_print("rtree", {"error": str(e)}, filename, filename)
         
         return records
     
@@ -253,6 +311,7 @@ class File:
         elif (mainindx == "b+"):
             self.p_print("b+", additional, mainfilename)
         else:
+            
             self.p_print("rtree", additional, mainfilename)
         
 
@@ -284,6 +343,7 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", additional,filename) 
                     else:
+                        
                         self.p_print("rtree", additional,filename)
                 
                 else:
@@ -296,6 +356,7 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record, additional,filename) 
                     else:
+                        
                         self.p_print("rtree", new_record, additional, filename)
 
     def execute(self, params: dict):
