@@ -346,7 +346,7 @@ class SeqFile:
         
         return []
 
-    def linear_search(self, seqfile, additional, elems, param = False, same_key = False):
+    def linear_delete(self, seqfile, additional, elems, param = False, same_key = False):
 
         records = []
 

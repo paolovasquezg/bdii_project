@@ -62,25 +62,45 @@ def main():
     result = file.execute(range_id_params)
     print("Range search result for product_id 3-10 BEFORE delete:", result, "\n")
 
-    # Test delete using sequential index
+    # Test delete using non-primary key field (name)
+    print("Testing delete by name...")
     delete_params = {
         "op": "remove",
-        "field": "product_id",
-        "value": 7
+        "field": "name",
+        "value": "Module"
     }
     result = file.execute(delete_params)
+    print("Delete by name result:", result)
 
     result = file.execute(range_id_params)
-    print("Range search result for product_id 3-10 AFTER delete:", result, "\n")
+    print("Range search result for product_id 3-10 AFTER delete by name:", result, "\n")
 
-    # Test search for deleted item
-    search_deleted = {
+    # Test search by name (non-primary key)
+    search_by_name = {
         "op": "search",
-        "field": "product_id",
-        "value": 7
+        "field": "name",
+        "value": "Component"
     }
-    result = file.execute(search_deleted)
-    print("Search result for deleted product_id 7:", result)
+    result = file.execute(search_by_name)
+    print("Search result for name 'Component':", result)
+
+    # Test search by price (non-primary key)
+    search_by_price = {
+        "op": "search",
+        "field": "price",
+        "value": 22.0
+    }
+    result = file.execute(search_by_price)
+    print("Search result for price 22.0:", result)
+
+    # Test delete by price (non-primary key)
+    delete_by_price = {
+        "op": "remove",
+        "field": "price", 
+        "value": 35.50
+    }
+    result = file.execute(delete_by_price)
+    print("Delete by price result:", result)
 
     shutil.rmtree("files", ignore_errors=True)
 

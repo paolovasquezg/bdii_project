@@ -9,7 +9,6 @@ class File:
         self.filename = get_filename(table)
         self.relation, self.indexes = get_json(self.filename, 2)
 
-
     def p_print(self, name, record, additional, filename = ""):
          print(name)
          print(record)
