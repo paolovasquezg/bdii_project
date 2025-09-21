@@ -45,12 +45,8 @@ class File:
             self.p_print("seq", record, additional,mainfilename) 
         elif (maindex == "isam"):
             self.p_print("isam", record, additional,mainfilename) 
-        elif (maindex == "hash"):
-            self.p_print("hash", record, additional,mainfilename) 
         elif (maindex == "b+"):
             self.p_print("b+", record, additional, mainfilename) 
-        else:
-            self.p_print("rtree", record, additional, mainfilename) 
             
         if len(record) >= 1:
 
@@ -79,7 +75,7 @@ class File:
                         self.p_print("hash", new_record,additional,filename) 
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
-                    else:
+                    elif (indx == "rtree"):
                         self.p_print("rtree", new_record,additional,filename) 
     
     def search(self, params: dict): 
@@ -115,12 +111,8 @@ class File:
                 self.p_print("seq", additional, mainfilename) 
             elif (mainindx == "isam"):
                 self.p_print("isam", additional, mainfilename) 
-            elif (mainindx  == "hash"):
-                self.p_print("hash", additional, mainfilename) 
             elif (mainindx == "b+"):
                 self.p_print("b+", additional, mainfilename) 
-            else:
-                self.p_print("rtree", additional, mainfilename) 
         
         else:
             
@@ -131,7 +123,7 @@ class File:
                 self.p_print("hash", additional, filename) 
             elif (indx == "b+"):
                 self.p_print("b+", additional, filename) 
-            else:
+            elif (indx == "rtree"):
                 self.p_print("rtree", additional, filename) 
         
         return records
@@ -168,29 +160,21 @@ class File:
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
                 self.p_print("isam", additional, mainfilename)
-            elif (mainindx  == "hash"):
-                return []
             elif (mainindx == "b+"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
                 self.p_print("b+", additional, mainfilename)
-            else:
-                additional["point"] = params["point"]
-                additional["r"] = params["r"]
-                self.p_print("rtree", additional, mainfilename)
         
         else:
             
             filename = self.indexes[field]["filename"]
             indx = self.indexes[field]["index"]
 
-            if (indx  == "hash"):
-                return []
-            elif (indx == "b+"):
+            if (indx == "b+"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
                 self.p_print("b+", additional, filename)
-            else:
+            elif (indx == "rtree"):
                 additional["point"] = params["point"]
                 additional["r"] = params["r"]
                 self.p_print("rtree", additional, filename)
@@ -213,11 +197,15 @@ class File:
             return []
         
         if mainindex:
-            self.p_print("rtree", additional, mainfilename)
+            if (mainindx == "rtree"):
+                self.p_print("rtree", additional, mainfilename)
         else:
             
             filename = self.indexes[field]["filename"]
-            self.p_print("rtree", additional, filename)
+            indx = self.indexes[field]["index"]
+
+            if (indx == "rtree"):
+                self.p_print("rtree", additional, filename)
         
         return records
     
@@ -248,14 +236,9 @@ class File:
             self.p_print("seq", additional, mainfilename)
         elif (mainindx == "isam"):
             self.p_print("isam", additional, mainfilename)
-        elif (mainindx  == "hash"):
-            self.p_print("hash", additional, mainfilename)
         elif (mainindx == "b+"):
             self.p_print("b+", additional, mainfilename)
-        else:
-            self.p_print("rtree", additional, mainfilename)
         
-
         for index in self.indexes:
 
             if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
@@ -283,7 +266,7 @@ class File:
                         self.p_print("hash",additional,filename) 
                     elif (indx == "b+"):
                         self.p_print("b+", additional,filename) 
-                    else:
+                    elif (indx == "rtree"):
                         self.p_print("rtree", additional,filename)
                 
                 else:
@@ -295,7 +278,7 @@ class File:
                         self.p_print("hash",new_record,additional,filename) 
                     elif (indx == "b+"):
                         self.p_print("b+", new_record, additional,filename) 
-                    else:
+                    elif (indx == "rtree"):
                         self.p_print("rtree", new_record, additional, filename)
 
     def execute(self, params: dict):

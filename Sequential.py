@@ -2,7 +2,7 @@ from Methods import get_json, build_format
 from Record import Record
 import struct
 
-class HeapFile:
+class SeqFile:
     def __init__(self, filename: str):
         self.filename = filename
         self.schema = get_json(self.filename)[0] 
