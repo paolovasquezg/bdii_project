@@ -1,6 +1,6 @@
 from Methods import get_json, get_filename, put_json
-from Record import Record
 from Heap import HeapFile
+from Sequential import SeqFile
 import os
 
 class File:
@@ -37,12 +37,12 @@ class File:
         maindex = self.indexes["primary"]["index"]
         mainfilename = self.indexes["primary"]["filename"]
 
-        
         if (maindex == "heap"):
             InsFile = HeapFile(mainfilename)
             records = InsFile.insert(record,additional)
         elif (maindex == "sequential"):
-            self.p_print("seq", record, additional,mainfilename) 
+            InsFile = SeqFile(mainfilename)
+            records = InsFile.insert(record,additional)
         elif (maindex == "isam"):
             self.p_print("isam", record, additional,mainfilename) 
         elif (maindex == "b+"):
@@ -108,7 +108,8 @@ class File:
                 SearchFile = HeapFile(mainfilename)
                 records = SearchFile.search(additional)
             elif (mainindx  == "sequential"):
-                self.p_print("seq", additional, mainfilename) 
+                SearchFile = SeqFile(mainfilename)
+                records = SearchFile.search(additional, same_key)
             elif (mainindx == "isam"):
                 self.p_print("isam", additional, mainfilename) 
             elif (mainindx == "b+"):
@@ -155,7 +156,8 @@ class File:
             elif (mainindx  == "sequential"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
-                self.p_print("seq", additional, mainfilename)
+                RangeFile = SeqFile(mainfilename)
+                records = RangeFile.range_search(additional, same_key)
             elif (mainindx == "isam"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
@@ -233,7 +235,8 @@ class File:
             DeleteFile = HeapFile(mainfilename)
             records = DeleteFile.remove(additional)
         elif (mainindx  == "sequential"):
-            self.p_print("seq", additional, mainfilename)
+            DeleteFile = SeqFile(mainfilename)
+            reconstructed, records = DeleteFile.remove(additional, same_key)
         elif (mainindx == "isam"):
             self.p_print("isam", additional, mainfilename)
         elif (mainindx == "b+"):

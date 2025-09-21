@@ -16,11 +16,9 @@ class HeapFile:
         with open(self.filename, "r+b") as heapfile:
 
             if len(additional["unique"]) == 0:
-                end=heapfile.tell()
-                heapfile.seek(end)
-
+                heapfile.seek(0, 2)
                 heapfile.write(form_record.pack())
-                return [(form_record.fields, end)]
+                return [(form_record.fields, heapfile.tell())]
 
             else:
 
@@ -41,7 +39,7 @@ class HeapFile:
                     if not temp_record.fields["deleted"]:
 
                         for unique_field in additional["unique"]:
-                            if form_record[unique_field] == temp_record[unique_field]:
+                            if form_record.fields[unique_field] == temp_record.fields[unique_field]:
                                 return []
                     else:
                         deleted.append(pos)

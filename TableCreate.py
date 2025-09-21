@@ -66,7 +66,8 @@ def create_table(table: str, fields: list):
                     put_schema.append({"name": "pos", "type": "i"})
                     put_schema.append({"name": "deleted", "type": "?"})
                     put_json(indexes[index]["filename"], [put_schema])
-                continue
+                    break
     
     tables[table] = table_file
     save_tables(tables)
+
