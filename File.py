@@ -297,6 +297,7 @@ class File:
                         self.p_print("b+", new_record, additional,filename) 
                     else:
                         self.p_print("rtree", new_record, additional, filename)
+        return records
 
     def execute(self, params: dict):
 
@@ -310,7 +311,7 @@ class File:
             return self.range_search(params)
         
         elif params["op"] == "knn":
-            self.knn(params)
+            return self.knn(params)
         
         else:
-            self.remove(params)
+            return self.remove(params)

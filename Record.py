@@ -7,6 +7,12 @@ class Record:
         self.fields.update(values)
         self.format = format
 
+    def __getitem__(self, key):
+        return self.fields[key]
+
+    def __setitem__(self, key, value):
+        self.fields[key] = value
+
     def pack(self):
         values = []
         for field in self.schema:
