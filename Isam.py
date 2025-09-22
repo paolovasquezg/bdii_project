@@ -208,9 +208,6 @@ class IsamFile:
         all_keys = [record.get(additional["key"], 0) for record in records]
 
         middle_idx = len(all_keys) // 2
-        left_keys = all_keys[:middle_idx]
-        right_keys = all_keys[middle_idx:]
-        
         root = all_keys[middle_idx]
 
         indexformat = ""
@@ -245,8 +242,12 @@ class IsamFile:
             datafile.write(Page.pack(self.REC_SIZE))
             datafile.write(Page.pack(self.REC_SIZE))
         
+        inserted_records = []
+
         for record in records:
-            self.insert(record, additional)
+            inserted_records.extend(self.insert(record, additional))
+        
+        return inserted_records
 
 
 
