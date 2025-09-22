@@ -103,5 +103,61 @@ def main():
 
     shutil.rmtree("files", ignore_errors=True)
 
+
+def IsamTest():
+    table2 = "products"
+    fields2 = [
+        {"name": "product_id", "type": "i", "key": "primary", "index": "isam"},
+        {"name": "name", "type": "s", "length": 32},
+        {"name": "price", "type": "f"},
+        {"name": "stock", "type": "i"}
+    ]
+
+    create_table(table2, fields2)
+
+    file = File(table2)
+
+    products = [
+        {"product_id": 1, "name": "Widget", "price": 9.99, "stock": 100},
+        {"product_id": 2, "name": "Gadget", "price": 12.50, "stock": 50},
+        {"product_id": 3, "name": "Tool", "price": 15.00, "stock": 30},
+        {"product_id": 4, "name": "Device", "price": 8.75, "stock": 75},
+        {"product_id": 5, "name": "Component", "price": 22.00, "stock": 25},
+        {"product_id": 6, "name": "Part", "price": 18.99, "stock": 40},
+        {"product_id": 7, "name": "Module", "price": 35.50, "stock": 15},
+        {"product_id": 8, "name": "Element", "price": 11.25, "stock": 60},
+        {"product_id": 9, "name": "Accessory", "price": 14.75, "stock": 45},
+        {"product_id": 10, "name": "Instrument", "price": 28.00, "stock": 20},
+        {"product_id": 11, "name": "Apparatus", "price": 16.99, "stock": 35},
+        {"product_id": 12, "name": "Mechanism", "price": 42.50, "stock": 10},
+        {"product_id": 13, "name": "System", "price": 19.25, "stock": 30},
+        {"product_id": 14, "name": "Assembly", "price": 33.75, "stock": 18},
+        {"product_id": 15, "name": "Unit", "price": 13.50, "stock": 55},
+        {"product_id": 16, "name": "Controller", "price": 45.00, "stock": 12},
+        {"product_id": 17, "name": "Sensor", "price": 23.75, "stock": 65},
+        {"product_id": 18, "name": "Actuator", "price": 38.50, "stock": 28},
+        {"product_id": 19, "name": "Processor", "price": 125.00, "stock": 8},
+        {"product_id": 20, "name": "Memory", "price": 67.25, "stock": 15},
+        {"product_id": 21, "name": "Connector", "price": 5.99, "stock": 200},
+        {"product_id": 22, "name": "Cable", "price": 8.50, "stock": 150},
+        {"product_id": 23, "name": "Switch", "price": 12.75, "stock": 80},
+        {"product_id": 24, "name": "Relay", "price": 15.50, "stock": 45},
+        {"product_id": 25, "name": "Capacitor", "price": 3.25, "stock": 300},
+        {"product_id": 26, "name": "Resistor", "price": 1.50, "stock": 500},
+        {"product_id": 27, "name": "Transistor", "price": 4.75, "stock": 250},
+        {"product_id": 28, "name": "Diode", "price": 2.25, "stock": 400},
+        {"product_id": 29, "name": "LED", "price": 1.99, "stock": 350},
+        {"product_id": 30, "name": "Battery", "price": 25.50, "stock": 60}
+    ]
+
+    build_params = {
+        "op": "build",
+        "records": products
+    }
+    
+    file.execute(build_params)
+    
+    shutil.rmtree("files", ignore_errors=True)
+
 if __name__ == "__main__":
-    main()
+    IsamTest()

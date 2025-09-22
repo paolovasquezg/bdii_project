@@ -1,6 +1,7 @@
 from Methods import get_json, get_filename, put_json
 from Heap import HeapFile
 from Sequential import SeqFile
+from Isam import IsamFile
 import os
 
 class File:
@@ -15,7 +16,52 @@ class File:
          print(additional)
          print(filename)
 
-    
+
+    def build(self, params):
+        if self.indexes["primary"]["index"] != "isam":
+            for record in params["records"]:
+                self.insert({"op": "insert", "record": record})    
+        else:
+            mainfilename = self.indexes["primary"]["filename"]
+            additional = {"key": None, "unique": []}
+            records = []
+
+            for index in self.indexes:
+                if self.indexes[index]["filename"] == mainfilename and index != "primary":
+                    additional["key"] = index
+                    break
+        
+            for field in self.relation:
+                if "key" in self.relation[field] and (self.relation[field]["key"] == "primary" or self.relation[field]["key"] == "unique"):
+                        additional["unique"].append(field)
+            
+            mainfilename = self.indexes["primary"]["filename"]
+
+            BuildFile = IsamFile(mainfilename)
+            records = BuildFile.build(params["records"], additional)
+
+            for index in self.indexes:
+
+                if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
+                    continue
+                
+                filename = self.indexes[index]["filename"]
+                additional = {"key": index}
+
+                for record in records:
+            
+                    new_record = {"pos": record[1], "deleted": False}
+                    new_record[index] = record[0][index]
+
+                    indx = self.indexes[index]["index"]
+
+                    if (indx  == "hash"):
+                        self.p_print("hash", new_record,additional,filename) 
+                    elif (indx == "b+"):
+                        self.p_print("b+", new_record,additional,filename) 
+                    elif (indx == "rtree"):
+                        self.p_print("rtree", new_record,additional,filename) 
+
     def insert(self, params):
         
         mainfilename = self.indexes["primary"]["filename"]
@@ -43,7 +89,7 @@ class File:
             InsFile = SeqFile(mainfilename)
             records = InsFile.insert(record,additional)
         elif (maindex == "isam"):
-            self.p_print("isam", record, additional,mainfilename) 
+            InsFile = IsamFile(mainfilename) 
         elif (maindex == "b+"):
             self.p_print("b+", record, additional, mainfilename) 
             
@@ -285,7 +331,10 @@ class File:
 
     def execute(self, params: dict):
 
-        if params["op"] == "insert":
+        if params["op"] == "build":
+            self.build(params)
+
+        elif params["op"] == "insert":
             self.insert(params)
         
         elif params["op"] == "search":
@@ -297,5 +346,5 @@ class File:
         elif params["op"] == "knn":
             self.knn(params)
         
-        else:
+        elif params["op"] == "remove":
             self.remove(params)
