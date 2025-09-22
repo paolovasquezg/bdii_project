@@ -16,7 +16,6 @@ def main():
 
     file = File(table2)
 
-
     products = [
         {"product_id": 1, "name": "Widget", "price": 9.99, "stock": 100},
         {"product_id": 2, "name": "Gadget", "price": 12.50, "stock": 50},

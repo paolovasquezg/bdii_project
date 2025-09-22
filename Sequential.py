@@ -242,7 +242,7 @@ class SeqFile:
 
         return records
     
-    def search(self, additional: dict, same_key: bool):
+    def search(self, additional: dict, same_key: bool): 
         
         records = []
 
