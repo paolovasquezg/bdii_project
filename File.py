@@ -2,7 +2,6 @@ from Methods import get_json, get_filename, put_json
 from Heap import HeapFile
 from Sequential import SeqFile
 from Isam import IsamFile
-import os
 
 class File:
 
