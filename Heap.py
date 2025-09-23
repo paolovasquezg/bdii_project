@@ -14,42 +14,36 @@ class HeapFile:
         form_record = Record(self.schema, self.format, record)
 
         with open(self.filename, "r+b") as heapfile:
+            schema_size = struct.unpack("I", heapfile.read(4))[0]
+            
+            heapfile.seek(0,2)
+            end=heapfile.tell()
 
-            if len(additional["unique"]) == 0:
-                heapfile.seek(0, 2)
-                heapfile.write(form_record.pack())
-                return [form_record.fields]
+            heapfile.seek(4+schema_size)
+            deleted = []
 
-            else:
+            while (heapfile.tell() != end):
+                pos = heapfile.tell()
+                data = heapfile.read(self.REC_SIZE)
 
-                schema_size = struct.unpack("I", heapfile.read(4))[0]
-                
-                heapfile.seek(0,2)
-                end=heapfile.tell()
+                temp_record = Record.unpack(data, self.format, self.schema)
 
-                heapfile.seek(4+schema_size)
-                deleted = []
+                if not temp_record.fields["deleted"]:
 
-                while (heapfile.tell() != end):
-                    pos = heapfile.tell()
-                    data = heapfile.read(self.REC_SIZE)
+                    for unique_field in additional["unique"]:
+                        if form_record[unique_field] == temp_record[unique_field]:
+                            return []
+                else:
+                    deleted.append(pos)
+            
+            pos = heapfile.tell()
+            if (len(deleted) >= 1):
+                heapfile.seek(deleted[0])
+                pos = deleted[0]
+            
+            heapfile.write(form_record.pack())
 
-                    temp_record = Record.unpack(data, self.format, self.schema)
-
-                    if not temp_record.fields["deleted"]:
-
-                        for unique_field in additional["unique"]:
-                            if form_record.fields[unique_field] == temp_record.fields[unique_field]:
-                                return []
-                    else:
-                        deleted.append(pos)
-                
-                if (len(deleted) >= 1):
-                    heapfile.seek(deleted[0])
-                
-                heapfile.write(form_record.pack())
-
-                return [form_record.fields]
+            return [(form_record.fields,pos)]
     
     def search(self, additional: dict):
         with open(self.filename, "rb") as heapfile:
@@ -115,3 +109,20 @@ class HeapFile:
                         break
                     
         return records
+
+    def search_by_pos(self, records: list):
+
+        ret_records = []
+
+        with open(self.filename, "r+b") as heapfile:
+
+            for record in records:
+
+                heapfile.seek(record["pos"])
+                data = heapfile.read(self.REC_SIZE)
+                record = Record.unpack(data,self.format, self.schema)
+
+                ret_records.append(record.fields)
+            
+        return records
+            

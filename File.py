@@ -54,7 +54,7 @@ class File:
                 additional = {"key": index}
 
                 for record in records:
-            
+
                     new_record = {"pk": record[self.primary_key], "deleted": False}
                     new_record[index] = record[index]
 
@@ -110,9 +110,16 @@ class File:
                 additional = {"key": index}
 
                 for record in records:
-            
-                    new_record = {"pk": record[self.primary_key], "deleted": False}
-                    new_record[index] = record[index]
+
+                    new_record = {}
+
+                    if self.indexes["primary"]["index"] == "heap":
+                        new_record = {"pos": record[1], "deleted": False}
+                        new_record[index] = record[0][index]
+                    
+                    else:
+                        new_record = {"pk": record[self.primary_key], "deleted": False}
+                        new_record[index] = record[index]
 
                     indx = self.indexes[index]["index"]
 
@@ -171,6 +178,10 @@ class File:
                 self.p_print("b+", additional, filename) 
             elif (indx == "rtree"):
                 self.p_print("rtree", additional, filename) 
+
+            if self.indexes["primary"]["index"] == "heap":
+                SearchFile = HeapFile(mainfilename)
+                return SearchFile.search_by_pos(records)
 
             ret_records = []
 
@@ -232,6 +243,11 @@ class File:
                 additional["point"] = params["point"]
                 additional["r"] = params["r"]
                 self.p_print("rtree", additional, filename)
+
+
+            if self.indexes["primary"]["index"] == "heap":
+                SearchFile = HeapFile(mainfilename)
+                return SearchFile.search_by_pos(records)
             
             ret_records = []
 
@@ -265,6 +281,10 @@ class File:
 
             if (indx == "rtree"):
                 self.p_print("rtree", additional, filename)
+
+            if self.indexes["primary"]["index"] == "heap":
+                SearchFile = HeapFile(self.indexes["primary"]["filename"])
+                return SearchFile.search_by_pos(records)
             
             ret_records = []
 
