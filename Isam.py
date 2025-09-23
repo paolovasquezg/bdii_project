@@ -245,7 +245,7 @@ class IsamFile:
         inserted_records = []
 
         for record in records:
-            inserted_records.extend(self.insert(record, additional))
+            self.insert(record, additional)
         
         return inserted_records
 

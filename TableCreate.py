@@ -10,6 +10,7 @@ def create_table(table: str, fields: list):
     indexes = {}
     new_fields = {}
     new_schema = []
+    pk = 0
     for field in fields:
         if "index" in field:
             
@@ -20,12 +21,16 @@ def create_table(table: str, fields: list):
             index = {"index": field["index"], "filename": f"files/{table}/{table}-{field["index"]}-{field["name"]}.dat"}
             if "key" in field and field["key"] == "primary":
                 indexes["primary"] = index
+                pk = field
             
             indexes[field["name"]] = index
         
         new_fields[field["name"]] = {"type": field["type"]}
         if "key" in field:
             new_fields[field["name"]]["key"] = field["key"]
+        
+        if "length" in field:
+            new_fields[field["name"]]["length"] = field["length"]
         
         new_field = field.copy()
 
@@ -34,10 +39,10 @@ def create_table(table: str, fields: list):
 
         if "key" in field:
             new_field.pop("key")
-
+        
         new_schema.append(new_field)
+     
             
-                
     if "primary" not in indexes:
         indexes["primary"] = {"index": "heap", "filename": f"files/{table}/{table}-heap.dat"}
 
@@ -63,7 +68,11 @@ def create_table(table: str, fields: list):
             for schem in new_schema:
                 if schem["name"] == index:
                     put_schema.append(schem)
-                    put_schema.append({"name": "pos", "type": "i"})
+
+                    if "length" in new_fields[pk]:
+                        put_schema.append({"name": "pk", "type": new_fields[pk]["type"], "length": new_fields[pk]["length"]})
+                    else:
+                        put_schema.append({"name": "pk", "type": new_fields[pk]["type"]})
                     put_schema.append({"name": "deleted", "type": "?"})
                     put_json(indexes[index]["filename"], [put_schema])
                     break

@@ -6,9 +6,15 @@ import os
 
 class File:
 
+    def get_pk(self):
+        for field in self.relation:
+            if "key" in self.relation[field] and (self.relation[field]["key"] == "primary"):
+                return field
+
     def __init__(self, table: str):
         self.filename = get_filename(table)
         self.relation, self.indexes = get_json(self.filename, 2)
+        self.primary_key = self.get_pk()
 
     def p_print(self, name, record, additional, filename = ""):
          print(name)
@@ -60,7 +66,8 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
                     elif (indx == "rtree"):
-                        self.p_print("rtree", new_record,additional,filename) 
+                        self.p_print("rtree", new_record,additional,filename)
+                        
 
     def insert(self, params):
         
@@ -93,26 +100,20 @@ class File:
         elif (maindex == "b+"):
             self.p_print("b+", record, additional, mainfilename) 
             
-        if len(record) >= 1:
+        if len(records) >= 1:
 
             for index in self.indexes:
 
                 if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
                     continue
                 
-                if len(records) > 1:
-                    filename = self.indexes[index]["filename"]
-                    schema = get_json(filename)                 
-                    os.remove(filename)
-                    put_json(filename, [schema])
-
                 filename = self.indexes[index]["filename"]
                 additional = {"key": index}
 
                 for record in records:
             
-                    new_record = {"pos": record[1], "deleted": False}
-                    new_record[index] = record[0][index]
+                    new_record = {"pk": record[self.primary_key], "deleted": False}
+                    new_record[index] = record[index]
 
                     indx = self.indexes[index]["index"]
 
@@ -121,7 +122,8 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
                     elif (indx == "rtree"):
-                        self.p_print("rtree", new_record,additional,filename) 
+                        self.p_print("rtree", new_record,additional,filename)
+                     
     
     def search(self, params: dict): 
         field = params["field"]
@@ -148,7 +150,6 @@ class File:
         
         if mainindex:
 
-
             if (mainindx == "heap"):
                 SearchFile = HeapFile(mainfilename)
                 records = SearchFile.search(additional)
@@ -171,6 +172,13 @@ class File:
                 self.p_print("b+", additional, filename) 
             elif (indx == "rtree"):
                 self.p_print("rtree", additional, filename) 
+
+            ret_records = []
+
+            for record in records:
+                ret_records.extend(self.search({"op": "insert", "field": self.primary_key, "value": record[self.primary_key]}))
+            
+            records = ret_records
         
         return records
     
@@ -225,6 +233,13 @@ class File:
                 additional["point"] = params["point"]
                 additional["r"] = params["r"]
                 self.p_print("rtree", additional, filename)
+            
+            ret_records = []
+
+            for record in records:
+                ret_records.extend(self.search({"op": "insert", "field": self.primary_key, "value": record[self.primary_key]}))
+            
+            records = ret_records
         
         return records
     
@@ -253,6 +268,13 @@ class File:
 
             if (indx == "rtree"):
                 self.p_print("rtree", additional, filename)
+            
+            ret_records = []
+
+            for record in records:
+                ret_records.extend(self.search({"op": "insert", "field": self.primary_key, "value": record[self.primary_key]}))
+            
+            records = ret_records
         
         return records
     
@@ -274,14 +296,13 @@ class File:
             same_key = False
         
         records = []
-        reconstructed = False
 
         if (mainindx == "heap"):
             DeleteFile = HeapFile(mainfilename)
             records = DeleteFile.remove(additional)
         elif (mainindx  == "sequential"):
             DeleteFile = SeqFile(mainfilename)
-            reconstructed, records = DeleteFile.remove(additional, same_key)
+            records = DeleteFile.remove(additional, same_key)
         elif (mainindx == "isam"):
             self.p_print("isam", additional, mainfilename)
         elif (mainindx == "b+"):
@@ -295,39 +316,21 @@ class File:
             filename = self.indexes[index]["filename"]
             indx = self.indexes[index]["index"]
 
-            if (reconstructed):
-                schema = get_json(filename)                 
-                os.remove(filename)
-                put_json(filename, [schema])
-
             for record in records:
 
-                if (reconstructed == False):
+                additional = {"key": index, "value": record[index], "unique": False}
 
-                    additional = {"key": index, "value": record[index], "unique": False}
-
-                    if "key" in self.relation[index]:
-                        if (self.relation[index]["key"] == "primary") or self.relation[index]["key"] == "unique":
-                            additional["unique"] = True
-                    
-                    if (indx  == "hash"):
-                        self.p_print("hash",additional,filename) 
-                    elif (indx == "b+"):
-                        self.p_print("b+", additional,filename) 
-                    elif (indx == "rtree"):
-                        self.p_print("rtree", additional,filename)
+                if "key" in self.relation[index]:
+                    if (self.relation[index]["key"] == "primary") or self.relation[index]["key"] == "unique":
+                        additional["unique"] = True
                 
-                else:
-                    new_record = {"pos": record[1], "deleted": False}
-                    new_record[index] = record[0][index]
-                    additional = {"key": index}
-
-                    if (indx  == "hash"):
-                        self.p_print("hash",new_record,additional,filename) 
-                    elif (indx == "b+"):
-                        self.p_print("b+", new_record, additional,filename) 
-                    elif (indx == "rtree"):
-                        self.p_print("rtree", new_record, additional, filename)
+                if (indx  == "hash"):
+                    self.p_print("hash",additional,filename) 
+                elif (indx == "b+"):
+                    self.p_print("b+", additional,filename) 
+                elif (indx == "rtree"):
+                    self.p_print("rtree", additional,filename)
+                
 
     def execute(self, params: dict):
 

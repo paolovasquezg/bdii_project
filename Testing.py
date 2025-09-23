@@ -160,4 +160,4 @@ def IsamTest():
     shutil.rmtree("files", ignore_errors=True)
 
 if __name__ == "__main__":
-    IsamTest()
+    main()

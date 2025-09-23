@@ -108,13 +108,10 @@ class SeqFile:
             result_list.append((record.fields, pos))
         
         seqfile.write(struct.pack("i", 0))
-        
-        return result_list
 
     def insert(self, record: dict, additional: dict):
 
         form_record = Record(self.schema, self.format, record)
-        insert_pos = 0
 
         with open(self.filename, "r+b") as seqfile:
 
@@ -129,7 +126,7 @@ class SeqFile:
                 seqfile.write(form_record.pack())
                 seqfile.write(struct.pack("i",0))
 
-                return [(form_record.fields, pos)]
+                return [form_record.fields]
             
             else:
                 seqfile.seek(4+schema_size)
@@ -154,7 +151,6 @@ class SeqFile:
 
                 if len(additional["unique"]) == 0:
                     seqfile.seek(0, 2) 
-                    insert_pos = seqfile.tell()
                     seqfile.write(form_record.pack())
                     
                     seqfile.seek(4+schema_size + 4 + (main_elements*self.REC_SIZE))
@@ -189,16 +185,15 @@ class SeqFile:
                         
                     if not inserted:
                         seqfile.seek(0, 2) 
-                        insert_pos = seqfile.tell()
                         seqfile.write(form_record.pack())
                         seqfile.seek(4+schema_size + 4 + (main_elements*self.REC_SIZE))
                         seqfile.write(struct.pack("i", aux_elements + 1))
                     
                     max_aux_size = int(math.log2(main_elements)) if main_elements > 0 else 1
                     if aux_elements + 1 > max_aux_size:
-                        return self.sort_and_merge(seqfile, additional)
-                    else:
-                        return [(form_record.fields, insert_pos)]
+                        self.sort_and_merge(seqfile, additional)
+                    
+                    return [form_record.fields]
                     
     def binary_search(self, seqfile, additional, begin, end, offset):
         while begin <= end:
@@ -402,4 +397,4 @@ class SeqFile:
                 aux_elements = struct.unpack("I", seqfile.read(4))[0]
                 records.extend(self.linear_delete(seqfile, additional, aux_elements))
 
-        return False, records
+        return records

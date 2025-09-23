@@ -18,7 +18,7 @@ class HeapFile:
             if len(additional["unique"]) == 0:
                 heapfile.seek(0, 2)
                 heapfile.write(form_record.pack())
-                return [(form_record.fields, heapfile.tell())]
+                return [form_record.fields]
 
             else:
 
@@ -44,14 +44,12 @@ class HeapFile:
                     else:
                         deleted.append(pos)
                 
-                pos = heapfile.tell()
                 if (len(deleted) >= 1):
                     heapfile.seek(deleted[0])
-                    pos = deleted[0]
                 
                 heapfile.write(form_record.pack())
 
-                return [(form_record.fields,pos)]
+                return [form_record.fields]
     
     def search(self, additional: dict):
         with open(self.filename, "rb") as heapfile:
