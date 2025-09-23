@@ -56,8 +56,8 @@ class File:
 
                 for record in records:
             
-                    new_record = {"pos": record[1], "deleted": False}
-                    new_record[index] = record[0][index]
+                    new_record = {"pk": record[self.primary_key], "deleted": False}
+                    new_record[index] = record[index]
 
                     indx = self.indexes[index]["index"]
 
@@ -247,8 +247,6 @@ class File:
         field = params["field"]
 
         additional = {"key": field, "point": params["point"], "k": params["k"]}
-        mainfilename = self.indexes["primary"]["filename"]
-        mainindx = self.indexes["primary"]["index"]
         mainindex = False
         records = []
 
@@ -259,8 +257,8 @@ class File:
             return []
         
         if mainindex:
-            if (mainindx == "rtree"):
-                self.p_print("rtree", additional, mainfilename)
+            return []
+        
         else:
             
             filename = self.indexes[field]["filename"]
