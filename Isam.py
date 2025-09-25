@@ -61,6 +61,12 @@ class IndexPage:
         file.seek(0,2)
         return file.tell() // page_size
     
+    def __str__(self):
+        result = ""
+        for index in self.indexes:
+            result += f"({index.key} + {index.page})\n"
+        return result
+    
 class DataPage:
     HEADER_FORMAT = 'ii'
     HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
@@ -134,6 +140,25 @@ class IsamFile:
         self.index_filename = self.filename.replace(".dat", "_index.dat")
         self.create_files()
 
+    
+    def get_metrics(self, additional):
+        indexformat = ""
+
+        for field in self.schema:
+            if field["name"] == additional["key"]:
+                
+                if "length" in field:
+                    indexformat += f"{field["length"]}"
+                
+                indexformat += field["type"]
+
+        indexformat += "i"
+        indexsize = struct.calcsize(indexformat)
+        index_page_size = IndexPage.HEADER_SIZE + (indexsize*INDEX_FACTOR)
+        data_page_size = DataPage.HEADER_SIZE + (self.REC_SIZE * PAGE_FACTOR)
+
+        return indexformat, indexsize, index_page_size, data_page_size
+
 
     def remove_duplicates(self, records: list, uniques: list):
         if len(uniques) == 0:
@@ -170,6 +195,7 @@ class IsamFile:
         schema_size = struct.unpack("I", mainfile.read(4))[0]
 
         page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+        
 
         if len(page.records) < PAGE_FACTOR:
 
@@ -220,7 +246,7 @@ class IsamFile:
                     indexfile.seek((leaf_number-1)*index_page_size)
                     indexfile.write(leaf.pack(indexformat, indexsize))
 
-                    new_index_page = IndexPage(left_records)
+                    new_index_page = IndexPage(left_indexes)
                     indexfile.seek(0,2)
                     indexfile.write(new_index_page.pack(indexformat, indexsize))
 
@@ -232,24 +258,48 @@ class IsamFile:
 
                     indexfile.seek(0)
                     indexfile.write(root.pack(indexformat, indexsize))
+            
+            else:
 
+                while True:
 
+                    if self.check_duplicates(page.records, record, additional):
+                        return
+
+                    page.records.append(Record(self.schema, self.format, record))
+                    page.records.sort(key=lambda x: x.fields[additional["key"]])
+                    
+                    if (len(page.records) > PAGE_FACTOR):
+                        record = page.records.pop()
+
+                        mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+                        mainfile.write(page.pack(self.REC_SIZE))
+
+                        if (page.next_page != -1):
+                            page_number = page.next_page
+                            page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+                        
+                        else:
+
+                            new_page = DataPage([Record(self.schema, self.format, record)])
+                            page.next_page = DataPage.getTotalPages(mainfile, data_page_size, schema_size) + 1
+                            
+                            mainfile.seek(0,2)
+                            mainfile.write(new_page.pack(self.REC_SIZE))
+
+                            mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+                            mainfile.write(page.pack(self.REC_SIZE))
+
+                            break
+
+                    else:
+                        mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+                        mainfile.write(page.pack(self.REC_SIZE))
+                        break
 
     def insert(self, record: dict, additional: dict):
 
-        indexformat = ""
-
-        for field in self.schema:
-            if field["name"] == additional["key"]:
-                
-                if "length" in field:
-                    indexformat += f"{field["length"]}"
-                
-                indexformat += field["type"]
-
-        indexformat += "i"
-        indexsize = struct.calcsize(indexformat)
-        page_size = IndexPage.HEADER_SIZE + (indexsize*INDEX_FACTOR)
+        indexformat, indexsize, index_page_size, data_page_size = self.get_metrics(additional)
 
         if "delete" in record:
             del record["delete"]
@@ -284,12 +334,11 @@ class IsamFile:
             if (data_page == 0):
                 data_page = leaf.indexes[len(leaf.indexes) -1].page
                 leaf.indexes[len(leaf.indexes) -1].key = record[additional["key"]]
-                indexfile.seek((data_page-1) * page_size)
+                indexfile.seek((data_page-1) * index_page_size)
                 indexfile.write(leaf.pack(indexformat, indexsize))
 
             with open(self.filename, "r+b") as mainfile:
-                data_page_size = DataPage.HEADER_SIZE + (self.REC_SIZE * PAGE_FACTOR)
-                self.insert_on_page(record, additional, mainfile, indexfile, leaf, root, leaf_page, data_page, indexformat, indexsize, page_size, data_page_size)
+                self.insert_on_page(record, additional, mainfile, indexfile, leaf, root, leaf_page, data_page, indexformat, indexsize, index_page_size, data_page_size)
 
 
     def build(self, records: list, additional: dict):
@@ -306,18 +355,7 @@ class IsamFile:
         middle_idx = len(all_keys) // 2
         root = all_keys[middle_idx]
 
-        indexformat = ""
-
-        for field in self.schema:
-            if field["name"] == additional["key"]:
-                
-                if "length" in field:
-                    indexformat += f"{field["length"]}"
-                
-                indexformat += field["type"]
-
-        indexformat += "i"
-        indexsize = struct.calcsize(indexformat)
+        indexformat, indexsize, _, _ = self.get_metrics(additional)
 
         root_index = IndexPage([Index(root, 2), Index(all_keys[len(all_keys)-1], 3)])
         left_index = IndexPage([Index(root, 1)])
@@ -341,4 +379,201 @@ class IsamFile:
         for record in records:
             self.insert(record, additional)
         
-        return records  
+        return records
+
+    def search_on_page(self, additional, mainfile, page_number):
+        mainfile.seek(0)
+        schema_size = struct.unpack("I", mainfile.read(4))[0]
+        page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+
+        records = []
+
+        while True:
+
+            for record in page.records:
+
+                if record.fields[additional["key"]] > additional["value"]:
+                    return records
+                
+                if record.fields[additional["key"]] == additional["value"]:
+                    del record.fields["deleted"]
+                    records.append(record.fields)
+
+                    if additional["unique"]:
+                        return records
+            
+            if (page.next_page != -1):
+                page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+            
+            else:
+                break
+
+        return records
+    
+    def search_by_index(self, additional: dict):
+        indexformat, indexsize, _ , _ = self.get_metrics(additional)
+
+        with open(self.index_filename, "r+b") as indexfile:
+
+            root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+
+            leaf_page = 0
+
+            for i in range(len(root.indexes)):
+
+                if additional["value"] <= root.indexes[i].key:
+                    leaf_page = root.indexes[i].page
+                    break
+            
+            if (leaf_page == 0):
+                return []
+
+            leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+
+            data_page = 0
+
+            for i in range(len(leaf.indexes)):
+                if additional["value"] <= leaf.indexes[i].key:
+                    data_page = leaf.indexes[i].page
+                    break
+            
+            if (data_page == 0):
+                return []
+            
+            with open(self.filename, "r+b") as mainfile:
+                return self.search_on_page(additional, mainfile, data_page)
+    
+    def search_seq(self, additional: dict):
+
+        with open(self.filename, "r+b") as mainfile:
+            mainfile.seek(0,2)
+            end=mainfile.tell()
+
+            mainfile.seek(0)
+            schema_size = struct.unpack("I", mainfile.read(4))[0]
+
+            mainfile.seek(4+schema_size)
+
+            records = []
+
+            i=1
+            while (end != mainfile.tell()):
+                page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+
+                for record in page.records:
+
+                    if record.fields[additional["key"]] == additional["value"]:
+
+                        del record.fields["deleted"]
+                        records.append(record.fields)
+
+                        if additional["unique"]:
+                            return records
+            
+            return records
+
+
+    def search(self, additional: dict, same_key: bool):
+        
+        if (same_key):
+            return self.search_by_index(additional)
+        else:
+            return self.search_sequentially(additional)
+        
+    
+    def search_on_page_range(self, additional, mainfile, page_number):
+        mainfile.seek(0)
+        schema_size = struct.unpack("I", mainfile.read(4))[0]
+
+        page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+
+        records = []
+
+        while True:
+
+            for record in page.records:
+
+                if additional["min"] <= record.fields[additional["key"]] <= additional["max"]:
+                    del record.fields["deleted"]
+                    records.append(record.fields)
+                
+                if record.fields[additional["key"]] >= additional["max"]:
+                    return records
+            
+            if (page.next_page != -1):
+                page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+            
+            else:
+                break
+
+        return records
+        
+    
+    def search_range_by_index(self, additional):
+
+        indexformat, indexsize, _ , _ = self.get_metrics(additional)
+
+        records = []
+
+        with open(self.index_filename, "r+b") as indexfile:
+
+            with open(self.filename, "r+b") as mainfile:
+
+                root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+
+                for i in range(len(root.indexes)):
+
+                    if additional["min"] <= root.indexes[i].key or additional["max"] <= root.indexes[i].key:
+                        
+                        leaf_page = root.indexes[i].page
+
+                        leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+
+                        for j in range(len(leaf.indexes)):
+                            
+                            if additional["min"] <= leaf.indexes[j].key or additional["max"] <= leaf.indexes[j].key:
+
+                                data_page = leaf.indexes[j].page
+
+                                records.extend(self.search_on_page_range(additional, mainfile, data_page))
+
+                            if additional["min"] <= leaf.indexes[j].key and additional["max"] <= leaf.indexes[j].key:
+                                break
+                    
+                    if additional["min"] <= root.indexes[i].key and additional["max"] <= root.indexes[i].key:
+                        break
+        
+        return records
+                            
+    def search_range_seq(self, additional):
+
+        with open(self.filename, "r+b") as mainfile:
+            mainfile.seek(0,2)
+            end=mainfile.tell()
+
+            mainfile.seek(0)
+            schema_size = struct.unpack("I", mainfile.read(4))[0]
+
+            mainfile.seek(4+schema_size)
+
+            records = []
+
+            i=1
+            while (end != mainfile.tell()):
+                page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+
+                for record in page.records:
+
+                    if additional["min"] <= record.fields[additional["key"]] <= additional["max"]:
+                        del record.fields["deleted"]
+                        records.append(record.fields)
+
+            return records
+
+
+    def range_search(self, additional: dict, same_key: bool):
+
+        if (same_key):
+            return self.search_range_by_index(additional)
+        else:
+            return self.search_range_seq(additional)

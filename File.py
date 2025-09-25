@@ -95,7 +95,8 @@ class File:
             InsFile = SeqFile(mainfilename)
             records = InsFile.insert(record,additional)
         elif (maindex == "isam"):
-            InsFile = IsamFile(mainfilename) 
+            InsFile = IsamFile(mainfilename)
+            records = InsFile.insert(record,additional) 
         elif (maindex == "b+"):
             self.p_print("b+", record, additional, mainfilename) 
             
@@ -163,7 +164,8 @@ class File:
                 SearchFile = SeqFile(mainfilename)
                 records = SearchFile.search(additional, same_key)
             elif (mainindx == "isam"):
-                self.p_print("isam", additional, mainfilename) 
+                SearchFile = IsamFile(mainfilename)
+                records = SearchFile.search(additional, same_key)
             elif (mainindx == "b+"):
                 self.p_print("b+", additional, mainfilename) 
         
@@ -224,7 +226,8 @@ class File:
             elif (mainindx == "isam"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]
-                self.p_print("isam", additional, mainfilename)
+                RangeFile = IsamFile(mainfilename)
+                records = RangeFile.range_search(additional, same_key)
             elif (mainindx == "b+"):
                 additional["min"] = params["min"]
                 additional["max"] = params["max"]

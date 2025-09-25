@@ -147,7 +147,27 @@ def IsamTest():
         {"product_id": 27, "name": "Transistor", "price": 4.75, "stock": 250},
         {"product_id": 28, "name": "Diode", "price": 2.25, "stock": 400},
         {"product_id": 29, "name": "LED", "price": 1.99, "stock": 350},
-        {"product_id": 30, "name": "Battery", "price": 25.50, "stock": 60}
+        {"product_id": 30, "name": "Battery", "price": 25.50, "stock": 60},
+        {"product_id": 31, "name": "Microcontroller", "price": 15.75, "stock": 120},
+        {"product_id": 32, "name": "Arduino", "price": 35.00, "stock": 80},
+        {"product_id": 33, "name": "Raspberry Pi", "price": 75.00, "stock": 45},
+        {"product_id": 34, "name": "Breadboard", "price": 8.99, "stock": 200},
+        {"product_id": 35, "name": "Jumper Wires", "price": 5.50, "stock": 300},
+        {"product_id": 36, "name": "Power Supply", "price": 45.99, "stock": 60},
+        {"product_id": 37, "name": "Oscilloscope", "price": 299.99, "stock": 15},
+        {"product_id": 38, "name": "Multimeter", "price": 89.50, "stock": 35},
+        {"product_id": 39, "name": "Soldering Iron", "price": 29.99, "stock": 70},
+        {"product_id": 40, "name": "Heat Sink", "price": 3.75, "stock": 250},
+        {"product_id": 41, "name": "Fan", "price": 12.25, "stock": 150},
+        {"product_id": 42, "name": "LCD Display", "price": 22.50, "stock": 90},
+        {"product_id": 43, "name": "OLED Display", "price": 18.99, "stock": 110},
+        {"product_id": 44, "name": "Servo Motor", "price": 14.75, "stock": 85},
+        {"product_id": 45, "name": "Stepper Motor", "price": 28.00, "stock": 55},
+        {"product_id": 46, "name": "DC Motor", "price": 9.99, "stock": 175},
+        {"product_id": 47, "name": "Encoder", "price": 16.50, "stock": 65},
+        {"product_id": 48, "name": "Gyroscope", "price": 24.99, "stock": 40},
+        {"product_id": 49, "name": "Accelerometer", "price": 19.75, "stock": 75},
+        {"product_id": 50, "name": "Temperature Sensor", "price": 7.25, "stock": 180}
     ]
 
     build_params = {
@@ -156,6 +176,53 @@ def IsamTest():
     }
     
     file.execute(build_params)
+    
+
+    print("\n=== Testing ISAM Search ===")
+    
+    # Test individual search
+    search_params = {
+        "op": "search",
+        "field": "product_id",
+        "value": 4
+    }
+    search_result = file.execute(search_params)
+    print("Search result for product_id 4:", search_result)
+    
+    # Test another search
+    search_params2 = {
+        "op": "search",
+        "field": "product_id", 
+        "value": 1
+    }
+    search_result2 = file.execute(search_params2)
+    print("Search result for product_id 1:", search_result2)
+
+    print("\n=== Testing ISAM Range Search ===")
+    # Test range search for all records
+    range_all_params = {
+        "op": "range search",
+        "field": "product_id",
+        "min": 1,
+        "max": 50
+    }
+
+    range_all_result = file.execute(range_all_params)
+    print(f"Range search result for ALL records (1-50): Found {len(range_all_result)} records")
+    print("First 5 records:", range_all_result[:5])
+    
+    # Test smaller range search
+    range_small_params = {
+        "op": "range search",
+        "field": "product_id",
+        "min": 40,
+        "max": 50
+    }
+
+    range_small_result = file.execute(range_small_params)
+    print(f"Range search result for records (40-50): Found {len(range_small_result)} records")
+    print("Records 40-50:", range_small_result)
+
     
     shutil.rmtree("files", ignore_errors=True)
 
