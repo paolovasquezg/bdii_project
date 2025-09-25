@@ -3,8 +3,8 @@ from Record import Record
 import struct
 import os
 
-INDEX_FACTOR = 10
-PAGE_FACTOR = 10
+INDEX_FACTOR = 2
+PAGE_FACTOR = 4
 
 class Index:
 
@@ -17,9 +17,10 @@ class Index:
 
     @staticmethod
     def unpack(data: bytes, formato):
+        if len(data) < struct.calcsize(formato):
+            raise ValueError(f"Insufficient data: expected {struct.calcsize(formato)} bytes, got {len(data)} bytes")
         key, page = struct.unpack(formato, data)
         return Index(key, page)
-
 
 class IndexPage:
 
@@ -47,6 +48,9 @@ class IndexPage:
         indexes = []
         for _ in range(size):
             index_data = data[offset: offset + indexSize]
+            # Skip if we encounter null padding
+            if index_data == b'\x00' * indexSize:
+                break
             indexes.append(Index.unpack(index_data, formato))
             offset += indexSize
         return IndexPage(indexes)
@@ -57,6 +61,7 @@ class IndexPage:
         data = file.read(IndexPage.HEADER_SIZE + (indexSize*INDEX_FACTOR))
         return IndexPage.unpack(data, formato, indexSize)
     
+    @staticmethod
     def getTotalPages(file, page_size):
         file.seek(0,2)
         return file.tell() // page_size
@@ -184,7 +189,7 @@ class IsamFile:
 
             for field in additional["unique"]:
 
-                if temp.fields[field] == record[field]:
+                if temp.fields[field] == record.fields[field]:
                     return True
         
         return False
@@ -199,7 +204,7 @@ class IsamFile:
 
         if len(page.records) < PAGE_FACTOR:
 
-            if self.check_duplicates(page.records, record, additional):
+            if self.check_duplicates(page.records, Record(self.schema, self.format, record), additional):
                 return
             
             page.records.append(Record(self.schema, self.format, record))
@@ -209,7 +214,7 @@ class IsamFile:
         
         else:
 
-            if self.check_duplicates(page.records, record, additional):
+            if self.check_duplicates(page.records, Record(self.schema, self.format, record), additional):
                 return
 
             if not (len(leaf.indexes) == INDEX_FACTOR and len(root.indexes) == INDEX_FACTOR):
@@ -248,10 +253,11 @@ class IsamFile:
 
                     new_index_page = IndexPage(left_indexes)
                     indexfile.seek(0,2)
+                    new_page_number = IndexPage.getTotalPages(indexfile, index_page_size) + 1
                     indexfile.write(new_index_page.pack(indexformat, indexsize))
 
                     new_key = left_indexes[-1].key
-                    new_index = Index(new_key, IndexPage.getTotalPages(indexfile, index_page_size))
+                    new_index = Index(new_key, new_page_number)
 
                     root.indexes.append(new_index)
                     root.indexes.sort(key=lambda x: x.key)
@@ -261,12 +267,14 @@ class IsamFile:
             
             else:
 
+                record = Record(self.schema, self.format, record)
+
                 while True:
 
                     if self.check_duplicates(page.records, record, additional):
                         return
 
-                    page.records.append(Record(self.schema, self.format, record))
+                    page.records.append(Record(self.schema, self.format, record.fields))
                     page.records.sort(key=lambda x: x.fields[additional["key"]])
                     
                     if (len(page.records) > PAGE_FACTOR):
@@ -281,7 +289,7 @@ class IsamFile:
                         
                         else:
 
-                            new_page = DataPage([Record(self.schema, self.format, record)])
+                            new_page = DataPage([Record(self.schema, self.format, record.fields)])
                             page.next_page = DataPage.getTotalPages(mainfile, data_page_size, schema_size) + 1
                             
                             mainfile.seek(0,2)
@@ -334,7 +342,7 @@ class IsamFile:
             if (data_page == 0):
                 data_page = leaf.indexes[len(leaf.indexes) -1].page
                 leaf.indexes[len(leaf.indexes) -1].key = record[additional["key"]]
-                indexfile.seek((data_page-1) * index_page_size)
+                indexfile.seek((leaf_page-1) * index_page_size)
                 indexfile.write(leaf.pack(indexformat, indexsize))
 
             with open(self.filename, "r+b") as mainfile:

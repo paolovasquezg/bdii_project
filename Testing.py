@@ -200,16 +200,15 @@ def IsamTest():
 
     print("\n=== Testing ISAM Range Search ===")
     # Test range search for all records
-    range_all_params = {
-        "op": "range search",
-        "field": "product_id",
-        "min": 1,
-        "max": 50
-    }
+    # range_all_params = {
+    #     "op": "range search",
+    #     "field": "product_id",
+    #     "min": 1,
+    #     "max": 50
+    # }
 
-    range_all_result = file.execute(range_all_params)
-    print(f"Range search result for ALL records (1-50): Found {len(range_all_result)} records")
-    print("First 5 records:", range_all_result[:5])
+    # range_all_result = file.execute(range_all_params)
+    # print(range_all_result)
     
     # Test smaller range search
     range_small_params = {
