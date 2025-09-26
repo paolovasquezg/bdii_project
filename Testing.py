@@ -2,7 +2,59 @@ from TableCreate import create_table
 from File import File
 import shutil
 
-def main():
+
+def HeapTest():
+    print("\n=== Testing Heap (No Index) ===")
+    table = "heap_products"
+    fields = [
+        {"name": "product_id", "type": "i", "key": "primary"},
+        {"name": "name", "type": "s", "length": 32},
+        {"name": "price", "type": "f"},
+        {"name": "stock", "type": "i"}
+    ]
+    create_table(table, fields)
+    file = File(table)
+    products = [
+        {"product_id": 1, "name": "Widget", "price": 9.99, "stock": 100},
+        {"product_id": 2, "name": "Gadget", "price": 12.50, "stock": 50},
+        {"product_id": 3, "name": "Tool", "price": 15.00, "stock": 30},
+        {"product_id": 4, "name": "Device", "price": 8.75, "stock": 75}
+    ]
+    for prod in products:
+        params = {
+            "op": "insert",
+            "record": prod
+        }
+        file.execute(params)
+    # Test search by product_id
+    search_params = {
+        "op": "search",
+        "field": "product_id",
+        "value": 3
+    }
+    result = file.execute(search_params)
+    print("Heap search result for product_id 3:", result)
+    # Test delete by name
+    delete_params = {
+        "op": "remove",
+        "field": "name",
+        "value": "Device"
+    }
+    delete_result = file.execute(delete_params)
+    print("Heap delete result for name 'Device':", delete_result)
+    # Test range search
+    range_params = {
+        "op": "range search",
+        "field": "product_id",
+        "min": 1,
+        "max": 4
+    }
+    range_result = file.execute(range_params)
+    print("Heap range search result for product_id 1-4:", range_result)
+    shutil.rmtree("files", ignore_errors=True)
+
+
+def SeqTest():
 
     table2 = "products"
     fields2 = [
@@ -242,4 +294,4 @@ def IsamTest():
     shutil.rmtree("files", ignore_errors=True)
 
 if __name__ == "__main__":
-    IsamTest()
+    HeapTest()

@@ -31,7 +31,7 @@ class HeapFile:
                 if not temp_record.fields["deleted"]:
 
                     for unique_field in additional["unique"]:
-                        if form_record[unique_field] == temp_record[unique_field]:
+                        if form_record.fields[unique_field] == temp_record.fields[unique_field]:
                             return []
                 else:
                     deleted.append(pos)
