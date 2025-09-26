@@ -311,7 +311,11 @@ class File:
         records = []
 
         if "key" in self.relation[field]:
-            if (self.relation[field]["key"] == "primary") or self.relation[field]["key"] == "unique":
+            if (self.relation[field]["key"] == "primary"):
+                additional["unique"] = True
+                mainindex = True
+            
+            else:
                 additional["unique"] = True
         
         if field not in self.indexes:

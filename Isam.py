@@ -633,7 +633,149 @@ class IsamFile:
             return self.search_range_by_index(additional)
         else:
             return self.search_range_seq(additional)
+    
+    def rest_list(self, additional, mainfile, page: DataPage, page_number, data_page_size, schema_size):
         
+        repeat = False
+
+        while True:
+
+            if (page.next_page == -1):
+                mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+                mainfile.write(page.pack(self.REC_SIZE))
+                break
+
+            next_page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+
+            if len(next_page.records) == 0:
+                mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+                mainfile.write(page.pack(self.REC_SIZE))
+                break
+
+            if next_page.records[0].fields[additional["key"]] == additional["value"]:
+                repeat = True
+            
+            temp_record = next_page.records.pop(0)
+
+            page.records.append(temp_record)
+
+            mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
+            mainfile.write(page.pack(self.REC_SIZE))
+
+            page_number = page.next_page
+            page = next_page
+
+        return repeat
+    
+    def remove_seq(self, additional: dict):
+
+        _, _, _, data_page_size = self.get_metrics(additional)
+
+        with open(self.filename, "r+b") as mainfile:
+            mainfile.seek(0,2)
+            end=mainfile.tell()
+
+            mainfile.seek(0)
+            schema_size = struct.unpack("I", mainfile.read(4))[0]
+
+            mainfile.seek(4+schema_size)
+
+            records = []
+
+            i=1
+            while (end != mainfile.tell()):
+                repeat = False
+
+                page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+
+                for j in range(len(page.records)):
+
+                    if page.records[j].fields[additional["key"]] == additional["value"]:
+                        temp_record = page.records.pop(j)
+                        records.append(temp_record.fields)
+                        repeat = self.rest_list(additional, mainfile, page, i, data_page_size, schema_size)
+                        break
+
+                if not repeat:
+                    i+=1
+
+                if additional["unique"]:
+                    break
+
+            return records
+    
+    def remove_index(self, additional: dict):
+        indexformat, indexsize, _ , data_page_size = self.get_metrics(additional)
+        records = []
+
+        with open(self.index_filename, "r+b") as indexfile:
+
+            root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+
+            leaf_page = 0
+
+            for i in range(len(root.indexes)):
+
+                if additional["value"] <= root.indexes[i].key:
+                    leaf_page = root.indexes[i].page
+                    break
+            
+            if (leaf_page == 0):
+                return records
+
+            leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+
+            data_page = 0
+
+            for i in range(len(leaf.indexes)):
+                if additional["value"] <= leaf.indexes[i].key:
+                    data_page = leaf.indexes[i].page
+                    break
+            
+            if (data_page == 0):
+                return records
+            
+
+            with open(self.filename, "r+b") as mainfile:
+
+                mainfile.seek(0)
+                schema_size = struct.unpack("I", mainfile.read(4))[0]
+                
+                page = DataPage.getPage(mainfile, data_page, self.format, self.REC_SIZE, self.schema, schema_size)
+                page_number = data_page
+
+                while True:
+
+                    found = False
+
+                    if len(page.records) == 0:
+                        break
+
+                    for j in range(len(page.records)):
+
+                        if page.records[j].fields[additional["key"]] == additional["value"]:
+                            found = True
+                            temp_record = page.records.pop(j)
+                            records.append(temp_record.fields)
+                            self.rest_list(additional, mainfile, page, page_number, data_page_size, schema_size)
+                            break
+                
+                    if found:
+                        break
+                    
+                    if page.next_page == -1:
+                        break
+
+                    page_number = page.next_page
+                    page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+            
+        return records
+
+
     
     def remove(self, additional: dict, same_key: bool):
-        return []
+
+        if (same_key):
+            return self.remove_index(additional)
+        else:
+            return self.remove_seq(additional)

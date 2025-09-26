@@ -178,51 +178,67 @@ def IsamTest():
     file.execute(build_params)
     
 
-    print("\n=== Testing ISAM Search ===")
-    
-    # Test individual search
-    search_params = {
-        "op": "search",
-        "field": "name",
-        "value": "Widget"
+    print("\n=== Testing ISAM Delete (Short Test) ===")
+    # Test delete by product_id
+    delete_params_id = {
+        "op": "remove",
+        "field": "product_id",
+        "value": 45
     }
-    search_result = file.execute(search_params)
-    print("Search result for name Widget:", search_result)
-    
-    # Test another search
-    search_params2 = {
+    delete_result_id = file.execute(delete_params_id)
+    print("Delete result for product_id 45:", delete_result_id)
+
+    # Verify deletion by searching again
+    search_deleted_id = {
         "op": "search",
-        "field": "product_id", 
-        "value": 1
+        "field": "product_id",
+        "value": 45
     }
-    search_result2 = file.execute(search_params2)
-    print("Search result for product_id 1:", search_result2)
+    result_deleted_id = file.execute(search_deleted_id)
+    print("Search result for deleted product_id 45:", result_deleted_id)
 
-    print("\n=== Testing ISAM Range Search ===")
-    # Test range search for all records
-    # range_all_params = {
-    #     "op": "range search",
-    #     "field": "product_id",
-    #     "min": 1,
-    #     "max": 50
-    # }
+    print("\n=== Testing ISAM Delete (Multiple) and Range Search ===")
+    # Delete several product_ids
+    for pid in [45, 46, 47, 48, 49, 50]:
+        delete_params = {
+            "op": "remove",
+            "field": "product_id",
+            "value": pid
+        }
+        delete_result = file.execute(delete_params)
+        print(f"Delete result for product_id {pid}:", delete_result)
 
-    # range_all_result = file.execute(range_all_params)
-    # print(range_all_result)
-    
-    # Test smaller range search
-    range_small_params = {
+    # Range search for deleted range
+    range_deleted_params = {
         "op": "range search",
         "field": "product_id",
-        "min": 40,
+        "min": 45,
         "max": 50
     }
+    result_range_deleted = file.execute(range_deleted_params)
+    print("Range search result for product_id 45-50 after deletes:", result_range_deleted)
 
-    range_small_result = file.execute(range_small_params)
-    print(f"Range search result for records (40-50): Found {len(range_small_result)} records")
-    print("Records 40-50:", range_small_result)
+    print("\n=== Testing ISAM Delete by Another Field (name) ===")
+    # Delete by name
+    for name in ["LED", "Gyroscope", "Servo Motor"]:
+        delete_params = {
+            "op": "remove",
+            "field": "name",
+            "value": name
+        }
+        delete_result = file.execute(delete_params)
+        print(f"Delete result for name '{name}':", delete_result)
 
-    
+    # Range search for product_id 28-44 to check deletions
+    range_deleted_name_params = {
+        "op": "range search",
+        "field": "product_id",
+        "min": 28,
+        "max": 44
+    }
+    result_range_deleted_name = file.execute(range_deleted_name_params)
+    print("Range search result for product_id 28-44 after name deletes:", result_range_deleted_name)
+
     shutil.rmtree("files", ignore_errors=True)
 
 if __name__ == "__main__":
