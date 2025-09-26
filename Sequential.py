@@ -168,11 +168,10 @@ class SeqFile:
 
                         temp_record = Record.unpack(data, self.format, self.schema)
 
-                        if temp_record.fields["deleted"]:
+                        if temp_record.fields["deleted"] and len(additional["unique"]) <= 1:
 
                             if temp_record.fields[additional["key"]] >= form_record.fields[additional["key"]]:
                                 inserted = True
-                                insert_pos = pos
                                 seqfile.seek(pos)
                                 seqfile.write(form_record.pack())
                         

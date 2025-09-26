@@ -183,11 +183,11 @@ def IsamTest():
     # Test individual search
     search_params = {
         "op": "search",
-        "field": "product_id",
-        "value": 4
+        "field": "name",
+        "value": "Widget"
     }
     search_result = file.execute(search_params)
-    print("Search result for product_id 4:", search_result)
+    print("Search result for name Widget:", search_result)
     
     # Test another search
     search_params2 = {

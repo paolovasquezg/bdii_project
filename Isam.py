@@ -193,6 +193,38 @@ class IsamFile:
                     return True
         
         return False
+    
+    def additional_check(self, record, additional):
+        if len(additional["unique"]) == 1:
+            return False
+        
+        with open(self.filename, "r+b") as mainfile:
+            mainfile.seek(0,2)
+            end=mainfile.tell()
+
+            mainfile.seek(0)
+            schema_size = struct.unpack("I", mainfile.read(4))[0]
+
+            mainfile.seek(4+schema_size)
+
+            i=1
+            while (end != mainfile.tell()):
+                page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+
+                for temp_record in page.records:
+
+
+                    for key in additional["unique"]:
+
+                        if record[key] == temp_record.fields[key]:
+                            return True
+                        
+                i+=1
+            
+            return False
+
+
+
 
     def insert_on_page(self, record, additional, mainfile, indexfile, leaf, root, leaf_number, page_number, indexformat, indexsize, index_page_size, data_page_size):
 
@@ -205,7 +237,7 @@ class IsamFile:
         if len(page.records) < PAGE_FACTOR:
 
             if self.check_duplicates(page.records, Record(self.schema, self.format, record), additional):
-                return
+                return []
             
             page.records.append(Record(self.schema, self.format, record))
             page.records.sort(key=lambda x: x.fields[additional["key"]])
@@ -215,7 +247,7 @@ class IsamFile:
         else:
 
             if self.check_duplicates(page.records, Record(self.schema, self.format, record), additional):
-                return
+                return []
 
             if not (len(leaf.indexes) == INDEX_FACTOR and len(root.indexes) == INDEX_FACTOR):
                 page.records.append(Record(self.schema, self.format, record))
@@ -272,7 +304,7 @@ class IsamFile:
                 while True:
 
                     if self.check_duplicates(page.records, record, additional):
-                        return
+                        return []
 
                     page.records.append(Record(self.schema, self.format, record.fields))
                     page.records.sort(key=lambda x: x.fields[additional["key"]])
@@ -304,8 +336,13 @@ class IsamFile:
                         mainfile.seek(4+schema_size + (page_number-1) * data_page_size)
                         mainfile.write(page.pack(self.REC_SIZE))
                         break
+        
+        return [record]
 
     def insert(self, record: dict, additional: dict):
+
+        if self.additional_check(record,additional):
+            return []
 
         indexformat, indexsize, index_page_size, data_page_size = self.get_metrics(additional)
 
@@ -346,7 +383,7 @@ class IsamFile:
                 indexfile.write(leaf.pack(indexformat, indexsize))
 
             with open(self.filename, "r+b") as mainfile:
-                self.insert_on_page(record, additional, mainfile, indexfile, leaf, root, leaf_page, data_page, indexformat, indexsize, index_page_size, data_page_size)
+                return self.insert_on_page(record, additional, mainfile, indexfile, leaf, root, leaf_page, data_page, indexformat, indexsize, index_page_size, data_page_size)
 
 
     def build(self, records: list, additional: dict):
@@ -383,11 +420,13 @@ class IsamFile:
 
             datafile.write(Page.pack(self.REC_SIZE))
             datafile.write(Page.pack(self.REC_SIZE))
+
+        ret_records = []
         
         for record in records:
-            self.insert(record, additional)
+            ret_records.extend(self.insert(record, additional))
         
-        return records
+        return ret_records
 
     def search_on_page(self, additional, mainfile, page_number):
         mainfile.seek(0)
@@ -397,6 +436,9 @@ class IsamFile:
         records = []
 
         while True:
+
+            if len(page.records) == 0:
+                break
 
             for record in page.records:
 
@@ -477,6 +519,7 @@ class IsamFile:
 
                         if additional["unique"]:
                             return records
+                i+=1
             
             return records
 
@@ -486,7 +529,7 @@ class IsamFile:
         if (same_key):
             return self.search_by_index(additional)
         else:
-            return self.search_sequentially(additional)
+            return self.search_seq(additional)
         
     
     def search_on_page_range(self, additional, mainfile, page_number):
@@ -498,6 +541,9 @@ class IsamFile:
         records = []
 
         while True:
+
+            if len(page.records) == 0:
+                break
 
             for record in page.records:
 
@@ -575,6 +621,8 @@ class IsamFile:
                     if additional["min"] <= record.fields[additional["key"]] <= additional["max"]:
                         del record.fields["deleted"]
                         records.append(record.fields)
+                
+                i+=1
 
             return records
 
