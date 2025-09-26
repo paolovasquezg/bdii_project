@@ -633,3 +633,7 @@ class IsamFile:
             return self.search_range_by_index(additional)
         else:
             return self.search_range_seq(additional)
+        
+    
+    def remove(self, additional: dict, same_key: bool):
+        return []

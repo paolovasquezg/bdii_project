@@ -120,9 +120,28 @@ class HeapFile:
 
                 heapfile.seek(record["pos"])
                 data = heapfile.read(self.REC_SIZE)
-                record = Record.unpack(data,self.format, self.schema)
+                temp_record = Record.unpack(data,self.format, self.schema)
 
-                ret_records.append(record.fields)
+                ret_records.append(temp_record.fields)
+            
+        return records
+
+    def delete_by_pos(self, records: list):
+        ret_records = []
+
+        with open(self.filename, "r+b") as heapfile:
+
+            for record in records:
+
+                heapfile.seek(record["pos"])
+                data = heapfile.read(self.REC_SIZE)
+                temp_record = Record.unpack(data,self.format, self.schema)
+
+                temp_record.fields["deleted"] = True
+                heapfile.seek(record["pos"])
+                heapfile.write(temp_record.pack())
+
+                ret_records.append(temp_record.fields)
             
         return records
             

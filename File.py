@@ -306,6 +306,8 @@ class File:
         mainfilename = self.indexes["primary"]["filename"]
         mainindx = self.indexes["primary"]["index"]
         same_key = True
+        mainindex = False
+        search_index = ""
         records = []
 
         if "key" in self.relation[field]:
@@ -314,20 +316,63 @@ class File:
         
         if field not in self.indexes:
             same_key = False
+            mainindex = True
         
         records = []
-
-        if (mainindx == "heap"):
-            DeleteFile = HeapFile(mainfilename)
-            records = DeleteFile.remove(additional)
-        elif (mainindx  == "sequential"):
-            DeleteFile = SeqFile(mainfilename)
-            records = DeleteFile.remove(additional, same_key)
-        elif (mainindx == "isam"):
-            self.p_print("isam", additional, mainfilename)
-        elif (mainindx == "b+"):
-            self.p_print("b+", additional, mainfilename)
         
+        if mainindex:
+
+            if (mainindx == "heap"):
+                DeleteFile = HeapFile(mainfilename)
+                records = DeleteFile.remove(additional)
+            elif (mainindx  == "sequential"):
+                DeleteFile = SeqFile(mainfilename)
+                records = DeleteFile.remove(additional, same_key)
+            elif (mainindx == "isam"):
+                DeleteFile = IsamFile(mainfilename)
+                records = DeleteFile.remove(additional, same_key)
+            elif (mainindx == "b+"):
+                self.p_print("b+", additional, mainfilename)
+        
+        else:
+
+            search_index = self.indexes[field]["index"]
+            filename = self.indexes[field]["filename"]
+
+            if (search_index  == "hash"):
+                self.p_print("hash",additional,filename) 
+            elif (search_index == "b+"):
+                self.p_print("b+", additional,filename) 
+            elif (search_index == "rtree"):
+                self.p_print("rtree", additional,filename)
+            
+
+            if mainindex == "heap":
+
+                DeleteFile = HeapFile(mainfilename)
+                records = DeleteFile.delete_by_pos(records)
+            
+            else:
+
+                temp_records = []
+
+                for record in records:
+
+                    additional = {"key": self.primary_key, "value": record["pk"], "unique": True}
+                    same_key = True
+
+                    if (mainindx  == "sequential"):
+                        DeleteFile = SeqFile(mainfilename)
+                        temp_records.extend(DeleteFile.remove(additional, same_key))
+                    elif (mainindx == "isam"):
+                        DeleteFile = IsamFile(mainfilename)
+                        temp_records.extend(DeleteFile.remove(additional, same_key))
+                    elif (mainindx == "b+"):
+                        self.p_print("b+", additional, mainfilename)
+
+                records = temp_records
+
+
         for index in self.indexes:
 
             if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
@@ -336,9 +381,12 @@ class File:
             filename = self.indexes[index]["filename"]
             indx = self.indexes[index]["index"]
 
+            if indx == search_index:
+                continue
+
             for record in records:
 
-                additional = {"key": index, "value": record[index], "unique": False}
+                additional = {"key": index, "value": record[index], "unique": True}
 
                 if "key" in self.relation[index]:
                     if (self.relation[index]["key"] == "primary") or self.relation[index]["key"] == "unique":
