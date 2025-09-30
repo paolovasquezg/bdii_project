@@ -2,6 +2,7 @@ from methods.Methods import get_json, get_filename, put_json
 from indexes.Heap import HeapFile
 from indexes.Sequential import SeqFile
 from indexes.Isam import IsamFile
+from indexes.rtree.RTree import RTreeFile
 
 class File:
 
@@ -65,6 +66,7 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
                     elif (indx == "rtree"):
+                        # En build con ISAM no tenemos RID (pos); mantenemos el stub para no romper tu flujo
                         self.p_print("rtree", new_record,additional,filename)
                         
 
@@ -73,6 +75,10 @@ class File:
         mainfilename = self.indexes["primary"]["filename"]
         record = params["record"]
         record["deleted"] = False
+
+        # NUEVO: guardamos el original con la geometría para usarlo al insertar en R-Tree
+        orig = record.copy()
+
         additional = {"key": None, "unique": []}
         records = []
 
@@ -88,9 +94,16 @@ class File:
         maindex = self.indexes["primary"]["index"]
         mainfilename = self.indexes["primary"]["filename"]
 
+        # NUEVO: detectar todas las columnas con índice R-Tree
+        rtree_fields = [k for k, v in self.indexes.items() if k != "primary" and v["index"] == "rtree"]
+
         if (maindex == "heap"):
             InsFile = HeapFile(mainfilename)
-            records = InsFile.insert(record,additional)
+            # NUEVO: NO enviar al heap las columnas espaciales (arrays) para evitar struct.pack error
+            heap_record = record.copy()
+            for geo in rtree_fields:
+                heap_record.pop(geo, None)
+            records = InsFile.insert(heap_record,additional)
         elif (maindex == "sequential"):
             InsFile = SeqFile(mainfilename)
             records = InsFile.insert(record,additional)
@@ -115,8 +128,14 @@ class File:
                     new_record = {}
 
                     if self.indexes["primary"]["index"] == "heap":
+                        # record == (form_record.fields, pos)
                         new_record = {"pos": record[1], "deleted": False}
-                        new_record[index] = record[0][index]
+                        # si el índice secundario es R-Tree, usar la geometría del insert original
+                        if index in rtree_fields and index in orig:
+                            new_record[index] = orig[index]
+                        else:
+                            # para otros índices, tomar del registro empacado (sin campos espaciales)
+                            new_record[index] = record[0].get(index)
                     
                     else:
                         new_record = {"pk": record[self.primary_key], "deleted": False}
@@ -129,7 +148,17 @@ class File:
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename) 
                     elif (indx == "rtree"):
-                        self.p_print("rtree", new_record,additional,filename)
+                        # Insertamos en el R-Tree solo si tenemos RID (pos) y geometría
+                        if "pos" in new_record and (index in new_record) and (new_record[index] is not None):
+                            try:
+                                R = RTreeFile(filename); R.open()
+                                R.insert(new_record, {"key": index})
+                                R.close()
+                            except Exception as e:
+                                self.p_print("rtree_error", {"error": str(e)}, additional, filename)
+                        else:
+                            # Si el primario no es heap, dejamos el stub
+                            self.p_print("rtree", new_record,additional,filename)
                      
     
     def search(self, params: dict): 
@@ -179,6 +208,8 @@ class File:
             elif (indx == "b+"):
                 self.p_print("b+", additional, filename) 
             elif (indx == "rtree"):
+                # búsqueda puntual por igualdad no aplica al R-Tree;
+                # conservamos el stub para no romper flujos existentes
                 self.p_print("rtree", additional, filename) 
 
             if self.indexes["primary"]["index"] == "heap":
@@ -243,10 +274,14 @@ class File:
                 additional["max"] = params["max"]
                 self.p_print("b+", additional, filename)
             elif (indx == "rtree"):
-                additional["point"] = params["point"]
-                additional["r"] = params["r"]
-                self.p_print("rtree", additional, filename)
-
+                # llamada real al R-Tree (devolvemos directamente)
+                try:
+                    R = RTreeFile(filename); R.open()
+                    out = R.range_search({"point": params["point"], "r": params["r"], "heap": mainfilename})
+                    R.close()
+                    return out
+                except Exception as e:
+                    self.p_print("rtree_error", {"error": str(e)}, {"key": field, "point": params.get("point"), "r": params.get("r")}, filename)
 
             if self.indexes["primary"]["index"] == "heap":
                 SearchFile = HeapFile(mainfilename)
@@ -283,7 +318,14 @@ class File:
             indx = self.indexes[field]["index"]
 
             if (indx == "rtree"):
-                self.p_print("rtree", additional, filename)
+                # llamada real al R-Tree (devolvemos directamente)
+                try:
+                    R = RTreeFile(filename); R.open()
+                    out = R.knn({"point": params["point"], "k": params["k"], "heap": self.indexes["primary"]["filename"]})
+                    R.close()
+                    return out
+                except Exception as e:
+                    self.p_print("rtree_error", {"error": str(e)}, additional, filename)
 
             if self.indexes["primary"]["index"] == "heap":
                 SearchFile = HeapFile(self.indexes["primary"]["filename"])
@@ -422,4 +464,4 @@ class File:
             self.knn(params)
         
         elif params["op"] == "remove":
-            self.remove(params)
+            return self.knn(params)

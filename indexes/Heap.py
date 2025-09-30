@@ -110,21 +110,43 @@ class HeapFile:
                     
         return records
 
-    def search_by_pos(self, records: list):
+    # === ACTUALIZADO: resolver RIDs → registros completos ===
+    def search_by_pos(self, pos):
+        """
+        Si 'pos' es int  -> retorna un solo registro (dict) o None.
+        Si 'pos' es list -> compatibilidad con el flujo existente: retorna lista de dicts.
+        Ignora registros con 'deleted'=True.
+        """
+        with open(self.filename, "rb") as f:
+            schema_len = struct.unpack("I", f.read(4))[0]
+            base = 4 + schema_len
 
-        ret_records = []
+            # Caso 1: una sola posición (int)
+            if isinstance(pos, int):
+                f.seek(base + pos)
+                data = f.read(self.REC_SIZE)
+                if not data or len(data) < self.REC_SIZE:
+                    return None
+                rec = Record.unpack(data, self.format, self.schema)
+                if rec.fields.get("deleted"):
+                    return None
+                rec.fields.pop("deleted", None)
+                return rec.fields
 
-        with open(self.filename, "r+b") as heapfile:
-
-            for record in records:
-
-                heapfile.seek(record["pos"])
-                data = heapfile.read(self.REC_SIZE)
-                temp_record = Record.unpack(data,self.format, self.schema)
-
-                ret_records.append(temp_record.fields)
-            
-        return records
+            # Caso 2: lista de posiciones/objetos {"pos": ...}
+            ret_records = []
+            for item in pos:
+                p = item["pos"] if isinstance(item, dict) else int(item)
+                f.seek(base + p)
+                data = f.read(self.REC_SIZE)
+                if not data or len(data) < self.REC_SIZE:
+                    continue
+                rec = Record.unpack(data, self.format, self.schema)
+                if rec.fields.get("deleted"):
+                    continue
+                rec.fields.pop("deleted", None)
+                ret_records.append(rec.fields)
+            return ret_records
 
     def delete_by_pos(self, records: list):
         ret_records = []
@@ -144,4 +166,3 @@ class HeapFile:
                 ret_records.append(temp_record.fields)
             
         return records
-            
