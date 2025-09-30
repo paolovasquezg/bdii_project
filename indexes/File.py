@@ -1,7 +1,7 @@
-from Methods import get_json, get_filename, put_json
-from Heap import HeapFile
-from Sequential import SeqFile
-from Isam import IsamFile
+from methods.Methods import get_json, get_filename, put_json
+from indexes.Heap import HeapFile
+from indexes.Sequential import SeqFile
+from indexes.Isam import IsamFile
 
 class File:
 

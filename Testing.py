@@ -1,5 +1,5 @@
-from TableCreate import create_table
-from File import File
+from methods.TableCreate import create_table
+from indexes.File import File
 import shutil
 
 
@@ -294,4 +294,4 @@ def IsamTest():
     shutil.rmtree("files", ignore_errors=True)
 
 if __name__ == "__main__":
-    HeapTest()
+    IsamTest()

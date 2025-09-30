@@ -1,4 +1,4 @@
-from Methods import load_tables, put_json, save_tables
+from methods.Methods import load_tables, put_json, save_tables
 import os
     
 def create_table(table: str, fields: list):

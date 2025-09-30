@@ -1,5 +1,5 @@
-from Methods import get_json, build_format
-from Record import Record
+from methods.Methods import get_json, build_format
+from methods.Record import Record
 import struct
 
 class HeapFile:
