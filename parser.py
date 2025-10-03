@@ -142,7 +142,7 @@ class SQLRunner:
 
             return f"Índice '{kind}' creado sobre '{table}.{col}'."
 
-        m_tab = re.match(rf"^\s*CREATE\s+TABLE\s+({_IDENT})\s*\((.*)\)\s*(?:USING\s+({_IDENT}))?\s*$", st, re.I | re.S)
+        m_tab = re.basic operations, some cases missingmatch(rf"^\s*CREATE\s+TABLE\s+({_IDENT})\s*\((.*)\)\s*(?:USING\s+({_IDENT}))?\s*$", st, re.I | re.S)
         if not m_tab:
             raise ValueError("Sintaxis CREATE TABLE inválida")
         table = m_tab.group(1)
