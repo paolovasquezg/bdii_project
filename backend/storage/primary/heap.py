@@ -1,6 +1,6 @@
-from api.catalog.catalog import get_json
-from api.core.utils import build_format
-from api.core.record import Record
+from backend.catalog.catalog import get_json
+from backend.core.utils import build_format
+from backend.core.record import Record
 import struct
 
 class HeapFile:

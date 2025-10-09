@@ -2,11 +2,11 @@ from typing import Any, Dict, List
 from time import perf_counter
 import json as _json
 import struct
-from api.catalog.ddl import create_table, create_index, drop_table, drop_index
-from api.storage.file import File
-from api.catalog.catalog import table_meta_path, get_json
-from api.core.utils import build_format
-from api.core.record import Record
+from backend.catalog.ddl import create_table, create_index, drop_table, drop_index
+from backend.storage.file import File
+from backend.catalog.catalog import table_meta_path, get_json
+from backend.core.utils import build_format
+from backend.core.record import Record
 
 INTERNAL_FIELDS = {"deleted", "pos", "slot"}
 
@@ -264,7 +264,7 @@ class Executor:
                         rec = p.get("record")
                         if p.get("record_is_positional"):
                             # obtener orden de columnas desde el schema
-                            from api.catalog.catalog import table_meta_path, get_json
+                            from backend.catalog.catalog import table_meta_path, get_json
                             meta = table_meta_path(table)
                             relation, _ = get_json(str(meta), 2)
                             # si tu schema es lista de dicts [{name,...}, ...]

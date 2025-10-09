@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 from .settings import DATA_DIR
-from api.catalog.catalog import load_tables, save_tables, put_json, table_meta_path
+from backend.catalog.catalog import load_tables, save_tables, put_json, table_meta_path
 
 def create_table(table: str, fields: List[Dict]):
     # 1) carpeta bajo DATA_DIR
@@ -98,7 +98,7 @@ import shutil
 try:
     from .catalog import get_json
 except ImportError:
-    from api.catalog import get_json
+    from backend.catalog import get_json
 
 def _find_pk_name(relation: Dict[str, Dict]) -> Optional[str]:
     for col, spec in relation.items():

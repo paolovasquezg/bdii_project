@@ -1,6 +1,6 @@
-from api.sql.parser import SQLParser
-from api.planner.planner import Planner
-from api.engine.executor import Executor
+from backend.sql.parser import SQLParser
+from backend.planner.planner import Planner
+from backend.engine.executor import Executor
 
 class Engine:
     def __init__(self):

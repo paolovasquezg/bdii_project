@@ -13,9 +13,9 @@ if HERE not in sys.path:
 # Import Engine (soporta ambos layouts: engine/engine.py o engine.py)
 Engine = None
 try:
-    from api.engine.engine import Engine
+    from backend.engine.engine import Engine
 except Exception:
-    from api.engine import Engine  # type: ignore
+    from backend.engine import Engine  # type: ignore
 
 ENGINE = Engine()
 

@@ -1,8 +1,8 @@
-from api.catalog.catalog import get_json, get_filename
-from api.storage.primary.heap import HeapFile
-from api.storage.primary.sequential import SeqFile
-from api.storage.primary.isam import IsamFile
-from api.storage.secondary.rtree import RTree
+from backend.catalog.catalog import get_json, get_filename
+from backend.storage.primary.heap import HeapFile
+from backend.storage.primary.sequential import SeqFile
+from backend.storage.primary.isam import IsamFile
+from backend.storage.secondary.rtree import RTree
 import os
 
 DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
