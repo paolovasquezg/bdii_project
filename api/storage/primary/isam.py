@@ -1,5 +1,5 @@
 from api.catalog.catalog import get_json
-from api.core.types import build_format
+from api.core.utils import build_format
 from api.core.record import Record
 import struct
 import os
@@ -338,7 +338,6 @@ class IsamFile:
         return [record]
 
     def insert(self, record: dict, additional: dict):
-
         if self.additional_check(record,additional):
             return []
 
@@ -385,7 +384,6 @@ class IsamFile:
 
 
     def build(self, records: list, additional: dict):
-
         records = self.remove_duplicates(records, additional["unique"])
 
         if len(records) == 0 or os.path.getsize(self.index_filename) > 0:
@@ -523,7 +521,6 @@ class IsamFile:
 
 
     def search(self, additional: dict, same_key: bool):
-        
         if (same_key):
             return self.search_by_index(additional)
         else:
@@ -769,10 +766,7 @@ class IsamFile:
             
         return records
 
-
-    
     def remove(self, additional: dict, same_key: bool):
-
         if (same_key):
             return self.remove_index(additional)
         else:

@@ -5,7 +5,7 @@ import struct
 from api.catalog.ddl import create_table, create_index, drop_table, drop_index
 from api.storage.file import File
 from api.catalog.catalog import table_meta_path, get_json
-from api.core.types import build_format
+from api.core.utils import build_format
 from api.core.record import Record
 
 INTERNAL_FIELDS = {"deleted", "pos", "slot"}

@@ -583,7 +583,7 @@ class File:
             return out
 
         elif params["op"] == "rtree_range":
-            field = params["field"];
+            field = params["field"]
             rect = params["rect"]
             is_heap = (self.indexes["primary"]["index"] == "heap")
             idx_filename = self.indexes[field]["filename"]
@@ -625,7 +625,7 @@ class File:
                                 rec[k] = int(rec[k])
                             elif t in ("float", "real", "double", "double precision"):
                                 rec[k] = float(rec[k])
-                        self.execute({"op": "insert", "record": rec})
+                        self.insert({"op": "insert", "record": rec})
                         count += 1
                 return {"ok": True, "count": count}
 
