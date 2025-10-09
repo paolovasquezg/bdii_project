@@ -1,5 +1,6 @@
-from methods.Methods import get_json, build_format, put_json
-from methods.Record import Record
+from api.catalog.catalog import get_json
+from api.core.types import build_format
+from api.core.record import Record
 import struct
 import os
 
@@ -145,26 +146,23 @@ class IsamFile:
         self.index_filename = self.filename.replace(".dat", "_index.dat")
         self.create_files()
 
-    
     def get_metrics(self, additional):
         indexformat = ""
 
         for field in self.schema:
             if field["name"] == additional["key"]:
-                
+
                 if "length" in field:
                     indexformat += f"{field["length"]}"
-                
+
                 indexformat += field["type"]
 
         indexformat += "i"
         indexsize = struct.calcsize(indexformat)
-        index_page_size = IndexPage.HEADER_SIZE + (indexsize*INDEX_FACTOR)
+        index_page_size = IndexPage.HEADER_SIZE + (indexsize * INDEX_FACTOR)
         data_page_size = DataPage.HEADER_SIZE + (self.REC_SIZE * PAGE_FACTOR)
 
         return indexformat, indexsize, index_page_size, data_page_size
-
-
     def remove_duplicates(self, records: list, uniques: list):
         if len(uniques) == 0:
             return records

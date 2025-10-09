@@ -1,5 +1,6 @@
-from methods.Methods import get_json, build_format
-from methods.Record import Record
+from api.catalog.catalog import get_json
+from api.core.types import build_format
+from api.core.record import Record
 import struct
 import math
 

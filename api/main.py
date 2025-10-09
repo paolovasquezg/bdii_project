@@ -1,9 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from methods.Methods import load_tables
+from catalog.ddl import load_tables
+from engine.engine import Engine
 
 app = FastAPI(title="DB2 Project")
+engine = Engine()
 
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -21,10 +23,13 @@ def get_tables():
 
     for table in tables_names:
         tables.append(table)
-    
+
     return tables
 
 #aca debe usarse el parser
 @app.post("/query")
 def do_query(query: Query):
-    return {"query": query.content}
+    try:
+        return {"ok": True, "result": engine.run(query.content)}
+    except Exception as e:
+        raise HTTPException(400, str(e))
