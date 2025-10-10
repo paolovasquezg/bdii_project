@@ -1,5 +1,6 @@
-from methods.Methods import get_json, build_format
-from methods.Record import Record
+from backend.catalog.catalog import get_json
+from backend.core.utils import build_format
+from backend.core.record import Record
 import struct
 
 class HeapFile:
@@ -124,7 +125,7 @@ class HeapFile:
 
                 ret_records.append(temp_record.fields)
             
-        return records
+        return ret_records
 
     def delete_by_pos(self, records: list):
         ret_records = []
@@ -143,5 +144,5 @@ class HeapFile:
 
                 ret_records.append(temp_record.fields)
             
-        return records
+        return ret_records
             

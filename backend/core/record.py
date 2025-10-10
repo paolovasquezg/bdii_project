@@ -7,6 +7,12 @@ class Record:
         self.fields.update(values)
         self.format = format
 
+    def __getitem__(self, key):
+        return self.fields[key]
+
+    def __setitem__(self, key, value):
+        self.fields[key] = value
+
     def pack(self):
         values = []
         for field in self.schema:
@@ -26,15 +32,21 @@ class Record:
             elif t in ("d", "double", "double precision"):
                 val = float(val or 0.0)
             elif t in ("c", "char"):
-                val = (val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")).ljust(length, b"\x00")
+                val = (
+                    val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")
+                ).ljust(length, b"\x00")
             elif t in ("s", "varchar", "string"):
-                val = (val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")).ljust(length, b"\x00")
+                val = (
+                    val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")
+                ).ljust(length, b"\x00")
             elif t in ("b", "bool", "boolean", "?"):
                 val = bool(val)
             elif t in ("blob", "binary"):
                 val = (val or b"").ljust(length, b"\x00")
             elif t in ("date", "datetime"):
-                val = (val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")).ljust(length, b"\x00")
+                val = (
+                    val or b"" if isinstance(val, bytes) else str(val or "").encode("utf-8")
+                ).ljust(length, b"\x00")
             values.append(val)
         return struct.pack(self.format, *values)
 
@@ -69,7 +81,12 @@ class Record:
             else:
                 values[name] = raw
         return cls(schema, format, values)
-    
+
     def __str__(self):
-        return f"Record({{ {', '.join(f'{field["name"]}: {repr(self.fields[field["name"]])}' for field in self.schema)} }})"
-    
+        parts = []
+        for f in self.schema:
+            name = f["name"]
+            parts.append(f"{name}: {self.fields[name]!r}")
+        return "Record({ " + ", ".join(parts) + " })"
+
+    __repr__ = __str__

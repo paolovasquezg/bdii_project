@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>BD2 · Tester simple (tablas + JSON pretty + SQL bold)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{--bg:#0b0e13;--panel:#121722;--card:#171d29;--muted:#9aa4b2;--text:#e8eef8;--acc:#6ea8fe;--ok:#2ecc71;--err:#ff6b6b;--border:#243042}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px system-ui,Segoe UI,Roboto,Arial}
+  header{background:var(--panel);padding:12px 16px;border-bottom:1px solid var(--border)}
+  h1{margin:0;font-size:16px}
+  main{padding:16px;display:grid;gap:12px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  input,button{font:inherit}
+  input[type=text]{background:#0e131b;color:var(--text);border:1px solid var(--border);border-radius:10px;padding:8px 10px;min-width:280px}
+  button{padding:8px 12px;border-radius:10px;border:0;cursor:pointer;font-weight:700}
+  button.primary{background:var(--acc);color:#08111d}
+  button.ghost{background:#0e131b;border:1px solid var(--border);color:var(--text)}
+  .muted{color:var(--muted)}
+  .cards{display:grid;gap:12px;max-width:1100px}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px}
+  .card h3{margin:0 0 8px 0;font-size:15px}
+  .chip{display:inline-block;background:#0e131b;border:1px solid var(--border);padding:2px 8px;border-radius:999px;font-size:12px;margin-right:6px}
+  .chip.ok{background:#173024;border-color:#234a36;color:#9cf0c3}
+  .chip.err{background:#2b1313;border-color:#5b2a2a;color:#ffb3b3}
+  table{border-collapse:collapse;width:100%;max-width:1100px}
+  th,td{border:1px solid #213048;padding:6px 8px;text-align:left;font-size:13px}
+  th{background:#0f1520;position:sticky;top:0}
+  details{margin-top:8px}
+  /* JSON pretty */
+  pre.json{background:#0e131b;border:1px solid var(--border);border-radius:10px;padding:10px;overflow:auto;max-height:360px;margin:0}
+  .j-key{color:#93c5fd}
+  .j-str{color:#86efac}
+  .j-num{color:#fca5a5}
+  .j-bool{color:#facc15}
+  .j-null{color:#a3a3a3;font-style:italic}
+
+  /* SQL editor (overlay highlight + auto-grow) */
+  .sqlwrap{
+    position:relative;max-width:1100px;
+    --padY:12px; --padX:12px; --lh:1.45; --fs:14px;
+    font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  .sqlwrap .hl{
+    position:absolute; inset:0; margin:0;
+    background:#0e131b; border:1px solid var(--border); border-radius:12px;
+    padding:var(--padY) var(--padX);
+    white-space:pre-wrap; word-wrap:break-word; overflow:hidden; pointer-events:none;
+    color:#b3c1d1; line-height:var(--lh); font-size:var(--fs);
+  }
+  .sqlwrap .hl .kw{font-weight:700}
+  .sqlwrap .hl .placeholder{color:#4b5563}
+  .sqlwrap textarea{
+    position:relative; width:100%; min-height:80px; resize:vertical;
+    background:transparent; border:none; outline:none;
+    padding:var(--padY) var(--padX); border-radius:12px;
+    color:transparent; caret-color:var(--text); line-height:var(--lh); font-size:var(--fs);
+    box-sizing:border-box;
+  }
+  /* oculta el placeholder del textarea (evita duplicado) */
+  .sqlwrap textarea::placeholder{ color:transparent; }
+</style>
+</head>
+<body>
+<header><h1>BD2 · Tester simple</h1></header>
+<main>
+  <div class="card">
+    <div class="row">
+      <label class="muted">API URL</label>
+      <input id="api" type="text" value="http://127.0.0.1:8000">
+      <button id="btnRoot" class="ghost">Probar /</button>
+      <span id="hint" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>SQL</label>
+    <div class="sqlwrap">
+      <pre id="sqlHL" class="hl"></pre>
+      <textarea id="sql" placeholder="Escribe SQL; separa sentencias con ';'"></textarea>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <button id="btnExample" class="ghost">Ejemplo</button>
+      <button id="btnRun" class="primary">▶ Enviar /query</button>
+      <span id="status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="cards" id="results"></div>
+</main>
+<footer class="muted" style="padding:12px 16px;border-top:1px solid var(--border)">
+  Sirve este archivo con <code>python -m http.server 5500</code> y corre tu API con <code>uvicorn backend.main:app --reload --port 8000</code> (ajusta el puerto arriba si usas otro).
+</footer>
+
+<script>
+const apiI = document.getElementById('api');
+const sqlTA = document.getElementById('sql');
+const sqlHL = document.getElementById('sqlHL');
+const results = document.getElementById('results');
+const statusEl = document.getElementById('status');
+const hint = document.getElementById('hint');
+
+function base(){ return (apiI.value||'').replace(/\/+$/,''); }
+function clearResults(){ results.innerHTML = ""; statusEl.textContent=""; }
+function chip(text, cls=""){ const s=document.createElement('span'); s.className='chip '+cls; s.textContent=text; return s; }
+
+/* ========= SQL highlight + auto-grow ========= */
+function escapeHtml(s){ return s.replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[m])); }
+const KW = /\b(SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|IF|EXISTS|PRIMARY|KEY|USING|BETWEEN|AND|OR|NOT|LIKE|INNER|LEFT|RIGHT|JOIN|ON|ORDER|BY|GROUP|LIMIT|OFFSET|TRUE|FALSE|NULL)\b/gi;
+function highlightSQL(text){
+  if (!text) return `<span class="placeholder">${escapeHtml(sqlTA.placeholder||"")}</span>`;
+  const esc = escapeHtml(text);
+  return esc.replace(KW, m => `<span class="kw">${m}</span>`);
+}
+function syncHighlight(){
+  sqlHL.innerHTML = highlightSQL(sqlTA.value || "");
+  sqlHL.scrollTop = sqlTA.scrollTop;
+  // auto-grow: usa la altura del overlay para que caret y texto coincidan
+  sqlTA.style.height = "auto";
+  sqlTA.style.height = sqlHL.scrollHeight + "px";
+}
+sqlTA.addEventListener('input', syncHighlight);
+sqlTA.addEventListener('scroll', () => { sqlHL.scrollTop = sqlTA.scrollTop; });
+window.addEventListener('load', syncHighlight);
+
+/* ========= JSON pretty ========= */
+function syntaxHighlight(obj){
+  const json = (typeof obj === 'string') ? obj : JSON.stringify(obj, null, 2);
+  return json.replace(
+    /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(?:\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?)/g,
+    match => {
+      if (/^"/.test(match)){
+        const isKey = /:$/.test(match);
+        return `<span class="${isKey?'j-key':'j-str'}">${match}</span>`;
+      } else if (/true|false/.test(match)) {
+        return `<span class="j-bool">${match}</span>`;
+      } else if (/null/.test(match)) {
+        return `<span class="j-null">${match}</span>`;
+      }
+      return `<span class="j-num">${match}</span>`;
+    }
+  );
+}
+function showJSONCard(title, obj){
+  const card = document.createElement('div'); card.className = 'card';
+  const h3 = document.createElement('h3'); h3.textContent = title; card.appendChild(h3);
+  const pre = document.createElement('pre'); pre.className='json'; pre.innerHTML = syntaxHighlight(obj);
+  card.appendChild(pre); results.appendChild(card);
+}
+
+/* ========= Table render ========= */
+function renderTable(title, rows){
+  const card = document.createElement('div'); card.className = 'card';
+  const h3 = document.createElement('h3'); h3.textContent = title; card.appendChild(h3);
+
+  if (!Array.isArray(rows) || rows.length === 0){
+    const p = document.createElement('div'); p.className = 'muted'; p.textContent = 'Sin datos.';
+    card.appendChild(p); results.appendChild(card); return;
+  }
+  const exclude = new Set(['deleted','pos','_pos','_deleted']);
+  const cols = Array.from(rows.reduce((s,row)=>{
+    if (row && typeof row === 'object' && !Array.isArray(row)){
+      Object.keys(row).forEach(k=>{ if(!exclude.has(k)) s.add(k); });
+    }
+    return s;
+  }, new Set())).sort();
+
+  const table = document.createElement('table');
+  const thead = document.createElement('thead'); const trh = document.createElement('tr');
+  cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c; trh.appendChild(th); });
+  thead.appendChild(trh); table.appendChild(thead);
+
+  const tb = document.createElement('tbody');
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    cols.forEach(c=>{
+      const td=document.createElement('td');
+      const v = r?.[c];
+      td.textContent = (v===null) ? 'NULL' : (typeof v==='object' ? JSON.stringify(v) : String(v));
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  card.appendChild(table);
+  results.appendChild(card);
+}
+
+/* ========= UI actions ========= */
+document.getElementById('btnExample').onclick = () => {
+  const example = [
+    "DROP TABLE IF EXISTS products;",
+    "CREATE TABLE products (id INT PRIMARY KEY USING heap, name VARCHAR(32), price FLOAT);",
+    "INSERT INTO products (id,name,price) VALUES (1,'dup',99.0);",
+    "SELECT * FROM products WHERE id=1;"
+  ].join("\n");
+  sqlTA.value = example;
+  syncHighlight();
+};
+
+document.getElementById('btnRoot').onclick = async () => {
+  clearResults();
+  try {
+    const r = await fetch(base()+"/",{mode:"cors"});
+    const t = await r.text();
+    showJSONCard('GET / → '+r.status, tryParseJSON(t));
+  } catch (e) {
+    showJSONCard('FetchError /', String(e));
+  }
+};
+function tryParseJSON(t){ try{ return JSON.parse(t); }catch{ return t; } }
+
+document.getElementById('btnRun').onclick = async () => {
+  const sql = sqlTA.value || "";
+  if (!sql.trim()) { alert("Escribe SQL"); return; }
+  clearResults();
+  statusEl.textContent = "Enviando…";
+  try {
+    const r = await fetch(base()+"/query", {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ content: sql })
+    });
+    const raw = await r.text();
+    let env = null; try{ env = JSON.parse(raw); }catch{}
+    statusEl.textContent = "HTTP "+r.status + (env?.stats?.time_ms!=null ? ` • time=${env.stats.time_ms.toFixed?env.stats.time_ms.toFixed(2):env.stats.time_ms}ms` : "");
+
+    if (!env){
+      showJSONCard('Respuesta no-JSON', raw);
+      return;
+    }
+
+    // Tablas primero
+    const arr = Array.isArray(env.results) ? env.results : [];
+    arr.forEach((res, i)=>{
+      const header = document.createElement('div'); header.className = 'card';
+      const h3 = document.createElement('h3'); h3.textContent = `Result #${i+1} • ${res.action || 'query'}`;
+      const info = document.createElement('div');
+      info.append(chip(res.ok!==false?'OK':'ERR', res.ok!==false?'ok':'err'));
+      info.append(chip(res.kind || 'query'));
+      if (res.table) info.append(chip('table: '+res.table));
+      info.append(chip('count: '+(res.count ?? (Array.isArray(res.data)?res.data.length:0))));
+      if (res.meta && res.meta.affected!=null) info.append(chip('affected: '+res.meta.affected));
+      header.appendChild(h3); header.appendChild(info); results.appendChild(header);
+
+      if (Array.isArray(res.data)) renderTable('Datos', res.data);
+
+      const d = document.createElement('details'); const sum = document.createElement('summary');
+      sum.textContent = 'Ver JSON de este result'; d.appendChild(sum);
+      const pre = document.createElement('pre'); pre.className='json'; pre.innerHTML = syntaxHighlight(res);
+      d.appendChild(pre); results.appendChild(d);
+    });
+
+    const dEnv = document.createElement('details'); dEnv.open = false;
+    const sEnv = document.createElement('summary'); sEnv.textContent = 'Ver envelope completo';
+    dEnv.appendChild(sEnv);
+    const preEnv = document.createElement('pre'); preEnv.className='json'; preEnv.innerHTML = syntaxHighlight(env);
+    dEnv.appendChild(preEnv);
+    results.appendChild(dEnv);
+
+  } catch (e) {
+    statusEl.textContent = "FetchError";
+    showJSONCard('FetchError /query', String(e) + "\n\nTips:\n- Puerto correcto (8000/8080)\n- backend.main:app corriendo\n- CORS: un solo CORSMiddleware");
+  }
+};
+</script>
+</body>
+</html>
