@@ -119,6 +119,15 @@ uvicorn backend.main:app --reload --port 8080
 
 También puedes invocar el motor desde scripts de prueba (ver carpeta `testing/`).
 
+### Interfaz tester
+
+Ejecutar **desde la raíz del proyecto**.
+
+
+```bash
+python -m http.server 5500
+```
+
 ---
 
 ## API HTTP
