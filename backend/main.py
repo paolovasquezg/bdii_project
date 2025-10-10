@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
-from catalog.ddl import load_tables
-from engine.engine import Engine
+from backend.catalog.ddl import load_tables
+from backend.engine.engine import Engine
 
 app = FastAPI(title="DB2 Project")
 engine = Engine()
@@ -30,6 +30,7 @@ def get_tables():
 @app.post("/query")
 def do_query(query: Query):
     try:
-        return {"ok": True, "result": engine.run(query.content)}
+        return engine.run(query.content)
+        # return {"ok": True, "result": engine.run(query.content)}
     except Exception as e:
         raise HTTPException(400, str(e))

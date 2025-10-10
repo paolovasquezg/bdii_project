@@ -73,7 +73,8 @@ def main():
             stock INT
         );
     """)
-    imp = run_sql(f"CREATE TABLE {tbl} FROM FILE '{csv_path.replace('\\', '/')}';")
+    clean = csv_path.replace('\\', '/')
+    imp = run_sql(f"CREATE TABLE {tbl} FROM FILE '{clean}';")
     if not imp.get("ok", False):
         import_csv_via_sql_inserts(tbl, csv_path)
 

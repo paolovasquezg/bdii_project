@@ -59,9 +59,23 @@ def _sanitize_rows(rows):
     return out, len(out)
 
 def _kind_for(action: str) -> str:
-    if action in ("create_table","drop_table"): return "ddl.table"
-    if action in ("create_index","drop_index"): return "ddl.index"
-    if action in ("insert","remove"): return "dml"
+    # DDL
+    if action in (
+        "create_table", "drop_table",
+        "create_index", "drop_index",
+        "create_table_from_file"
+    ):
+        return "ddl"
+
+    # DML (incluye consultas/selects)
+    if action in (
+        "insert", "remove",
+        "search", "range search", "knn",
+        "search_in", "geo_within"
+    ):
+        return "dml"
+
+    # Fallback
     return "query"
 
 def ok_result(action, table=None, data=None, meta=None, message=None, t_ms: float = 0.0):
@@ -121,10 +135,50 @@ class Executor:
                     path = p["path"]
 
                     F = File(table)
+                    prim = (F.indexes or {}).get("primary", {})
+                    pk_kind = (prim.get("index") or "").lower()
 
-                    res = F.execute({"op": "import_csv", "path": path})
+                    if pk_kind == "isam":
+                        import csv, json as _json
+                        recs = []
+                        with open(path, newline="", encoding="utf-8") as f:
+                            r = csv.DictReader(f)
+                            for row in r:
+                                rec = {}
+                                for col, spec in F.relation.items():
+                                    v = row.get(col)
+                                    t = str(spec.get("type") or "").lower()
 
-                    results.append(ok_result(action, table, count=(res or {}).get("count", 0)))
+                                    # Parse JSON para campos tipo lista (ej. coords: "[x,y]")
+                                    if isinstance(v, str) and v.startswith("[") and v.endswith("]"):
+                                        try:
+                                            import json
+                                            v = json.loads(v)
+                                        except Exception:
+                                            pass
+
+                                    # Cast básico por tipo
+                                    if v == "" or v is None:
+                                        v = None
+                                    elif t in ("int", "i"):
+                                        v = int(v)
+                                    elif t in ("float", "real", "double", "f"):
+                                        v = float(v)
+                                    elif t in ("bool", "boolean", "?"):
+                                        v = str(v).strip().lower() in ("1", "true", "t", "yes", "y")
+                                    # strings/varchar se dejan como están
+                                    rec[col] = v
+
+                                recs.append(rec)
+
+                        # Esto inicializa el índice (root + hojas + páginas) y luego inserta.
+                        F.execute({"op": "build", "records": recs})
+                        results.append(ok_result(action, table))
+
+                    else:
+                        # Heap/Sequential u otros → import fila a fila
+                        F.execute({"op": "import_csv", "path": path})
+                        results.append(ok_result(action, table))
 
                 elif action == "drop_table":
                     drop_table(table)
@@ -263,18 +317,24 @@ class Executor:
                         table = p["table"]
                         rec = p.get("record")
                         if p.get("record_is_positional"):
-                            # obtener orden de columnas desde el schema
                             from backend.catalog.catalog import table_meta_path, get_json
                             meta = table_meta_path(table)
                             relation, _ = get_json(str(meta), 2)
-                            # si tu schema es lista de dicts [{name,...}, ...]
                             order = [f["name"] for f in relation] if isinstance(relation, list) else list(
                                 relation.keys())
                             rec = dict(zip(order, rec))
-                        # Llamar a storage con la clave correcta 'record'
+
                         F = File(table)
-                        F.execute({"op": "insert", "record": rec})
-                        results.append(ok_result(action, table, count=1))
+                        res = F.execute({"op": "insert", "record": rec})
+
+                        # Determinar filas afectadas (mínimo 1 si no hay retorno)
+                        affected = 1
+                        if isinstance(res, dict) and "affected" in res:
+                            affected = int(res["affected"])
+                        elif isinstance(res, list):
+                            affected = len(res)
+
+                        results.append(ok_result(action, table, meta={"affected": affected}))
 
                     elif action == "remove":
                         res = F.execute({"op": "remove", "field": p["field"], "value": p["value"]})

@@ -541,10 +541,10 @@ class File:
     def execute(self, params: dict):
 
         if params["op"] == "build":
-            self.build(params)
+            return self.build(params)
 
         elif params["op"] == "insert":
-            self.insert(params)
+            return self.insert(params)
         
         elif params["op"] == "search":
             return self.search(params)
@@ -605,30 +605,8 @@ class File:
             return out
 
         elif params["op"] == "import_csv":
-            import csv
+            import csv, json as _json
             prim = self.indexes.get("primary", {})
-            # 2.1) ISAM → inserts fila a fila
-            if prim.get("index") == "isam":
-                # orden de columnas según schema
-                order = [f["name"] for f in self.relation] if isinstance(self.relation, list) else list(
-                    self.relation.keys())
-                count = 0
-                with open(params["path"], newline="", encoding="utf-8") as f:
-                    r = csv.DictReader(f)
-                    for row in r:
-                        rec = {k: row[k] for k in order if k in row}
-                        # casteos simples según tipo
-                        for k in order:
-                            t = str(self.relation[k]["type"]).lower() if isinstance(self.relation, dict) else str(
-                                [x for x in self.relation if x["name"] == k][0]["type"]).lower()
-                            if t in ("int", "integer"):
-                                rec[k] = int(rec[k])
-                            elif t in ("float", "real", "double", "double precision"):
-                                rec[k] = float(rec[k])
-                        self.insert({"op": "insert", "record": rec})
-                        count += 1
-                return {"ok": True, "count": count}
-
             path = params["path"]
             inserted = 0
             with open(path, newline="", encoding="utf-8") as f:
