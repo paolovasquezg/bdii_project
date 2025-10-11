@@ -71,12 +71,79 @@ def _kind_for(action: str) -> str:
     if action in (
         "insert", "remove",
         "search", "range search", "knn",
-        "search_in", "geo_within"
+        "search_in", "geo_within",
+        "select"
     ):
         return "dml"
 
     # Fallback
     return "query"
+
+def _project_row(row, cols):
+    if cols is None:
+        return {k: v for k, v in row.items() if k not in INTERNAL_FIELDS}
+    return {k: row.get(k) for k in cols if k not in INTERNAL_FIELDS}
+
+def _as_point(v):
+    if isinstance(v, dict):
+        return (float(v.get("x")), float(v.get("y")))
+    if isinstance(v, (list, tuple)) and len(v) >= 2:
+        return (float(v[0]), float(v[1]))
+    if isinstance(v, str) and v.startswith("[") and v.endswith("]"):
+        try:
+            j = _json.loads(v)
+            if isinstance(j, (list, tuple)) and len(j) >= 2:
+                return (float(j[0]), float(j[1]))
+        except Exception:
+            pass
+    return None
+
+def _eval_where(where, row):
+    if not where:
+        return True
+
+    # BoolExpr: {"op": "AND"/"OR", "items":[...]}
+    if "items" in where and "left" not in where:
+        op = (where.get("op") or "").upper()
+        vals = [_eval_where(w, row) for w in (where.get("items") or [])]
+        return all(vals) if op == "AND" else any(vals)
+
+    # Comparison: {"left": <campo>, "op": "=", "<", ... , "right": <valor>}
+    if {"left","op","right"} <= set(where.keys()):
+        l = row.get(where["left"])
+        r = where["right"]
+        op = where["op"]
+        if op in ("=", "=="): return l == r
+        if op in ("!=", "<>"): return l != r
+        try:
+            lf, rf = float(l), float(r)
+        except Exception:
+            return False
+        return (op == "<" and lf < rf) or (op == "<=" and lf <= rf) or \
+               (op == ">" and lf > rf) or (op == ">=" and lf >= rf)
+
+    # Between: {"ident":c, "lo":a, "hi":b}
+    if {"ident","lo","hi"} <= set(where.keys()):
+        try:
+            v = float(row.get(where["ident"]))
+            return float(where["lo"]) <= v <= float(where["hi"])
+        except Exception:
+            return False
+
+    # InList: {"ident":c, "items":[...]}
+    if {"ident","items"} <= set(where.keys()):
+        return row.get(where["ident"]) in (where.get("items") or [])
+
+    # GeoWithin: {"ident":c, "center":{"x":..,"y":..}, "radius":r}
+    if {"ident","center","radius"} <= set(where.keys()):
+        p = _as_point(row.get(where["ident"]))
+        if p is None: return False
+        cx, cy = float(where["center"]["x"]), float(where["center"]["y"])
+        rr = float(where["radius"])
+        dx, dy = p[0]-cx, p[1]-cy
+        return (dx*dx + dy*dy) ** 0.5 <= rr
+
+    return False
 
 def ok_result(action, table=None, data=None, meta=None, message=None, t_ms: float = 0.0):
     meta = meta or {}
@@ -189,7 +256,7 @@ class Executor:
                     results.append(ok_result(action, table, message="Índice eliminado.", t_ms=(perf_counter()-t0)*1000))
 
                 elif action in ("insert", "remove", "search", "range search", "knn",
-                                "search_in", "geo_within"):
+                                "search_in", "geo_within", "select"):
                     F = File(table)
 
                     if action == "search_in":
@@ -342,6 +409,27 @@ class Executor:
                         if isinstance(res, list): affected = len(res)
                         elif isinstance(res, dict) and "affected" in res: affected = res["affected"]
                         results.append(ok_result(action, table, meta={"affected": affected}, message="OK", t_ms=(perf_counter()-t0)*1000))
+
+                    elif action == "select":
+                        F = File(table)
+
+                        # 1) Trae todas las filas (SELECT * FROM ...)
+                        rows = F.execute({"op": "scan"}) or []
+
+                        # 2) WHERE (si viene)
+                        where = p.get("where")
+                        if where:
+                            rows = [r for r in rows if isinstance(r, dict) and _eval_where(where, r)]
+
+                        # 3) Proyección (lista de columnas o '*')
+                        cols = p.get("columns")  # None => '*'
+                        projected = []
+                        for r in rows:
+                            if isinstance(r, dict):
+                                projected.append(_project_row(r, cols))
+
+                        data, _ = _sanitize_rows(projected)
+                        results.append(ok_result(action, table, data=data, t_ms=(perf_counter() - t0) * 1000))
 
                     else:
                         # Passthrough: search / range search / knn

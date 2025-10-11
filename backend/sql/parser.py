@@ -153,7 +153,8 @@ class Insert:
     kind: str = "insert"
     table: str = ""
     columns: Optional[List[str]] = None
-    values: List[Any] = field(default_factory=list)
+    values: Optional[List[Any]] = None
+    rows: List[List[Any]] = field(default_factory=list)
 
 @dataclass
 class Comparison:
@@ -487,14 +488,20 @@ class _Parser:
                 self._expect("OP", ",")
 
         self._expect("KW", "VALUES")
-        self._expect("OP", "(")
-        values = []
+
+        rows = []
         while True:
+            self._expect("OP", "(")
+            values = []
             values.append(self._parse_literal())
-            if self._accept("OP", ")"):
+            while self._accept("OP", ","):
+                values.append(self._parse_literal())
+            self._expect("OP", ")")
+            rows.append(values)
+            if not self._accept("OP", ","):
                 break
-            self._expect("OP", ",")
-        return Insert(table=table, columns=cols, values=values)
+        single = rows[0] if len(rows) == 1 else None
+        return Insert(table=table, columns=cols, values=single, rows=rows)
 
     # SELECT
     def _parse_select(self):
