@@ -3,6 +3,7 @@ from backend.storage.primary.heap import HeapFile
 from backend.storage.primary.sequential import SeqFile
 from backend.storage.primary.isam import IsamFile
 from backend.storage.secondary.rtree import RTree
+from backend.storage.secondary.hash import ExtendibleHashingFile
 import os
 
 DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
@@ -97,7 +98,15 @@ class File:
                     indx = self.indexes[index]["index"]
 
                     if (indx  == "hash"):
-                        self.p_print("hash", new_record,additional,filename) 
+                        h = ExtendibleHashingFile(filename)
+                        # Si el primario es HEAP, 'records' ~ [(row_dict, pos), ...]
+                        if self.indexes["primary"]["index"] == "heap":
+                            for row_dict, pos in records:
+                                if index not in row_dict:
+                                    continue
+                                rec = {"pos": pos, index: row_dict[index], "deleted": False}
+                                h.insert(rec, key_name=index)
+
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename)
 
@@ -170,8 +179,23 @@ class File:
 
                     indx = self.indexes[index]["index"]
 
-                    if (indx  == "hash"):
-                        self.p_print("hash", new_record,additional,filename) 
+                    if (indx == "hash"):
+                        h = ExtendibleHashingFile(filename)
+                        if self.indexes["primary"]["index"] == "heap":
+                            # records: [(row_dict, pos), ...]
+                            for row_dict, pos in records:
+                                if index not in row_dict:
+                                    continue
+                                rec = {"pos": pos, index: row_dict[index], "deleted": False}
+                                h.insert(rec, key_name=index)
+                        else:
+                            # records: [row_dict, ...]
+                            for row_dict in records:
+                                if index not in row_dict:
+                                    continue
+                                rec = {"pk": row_dict[self.primary_key], index: row_dict[index], "deleted": False}
+                                h.insert(rec, key_name=index)
+                        #self.p_print("hash", new_record,additional,filename)
                     elif (indx == "b+"):
                         self.p_print("b+", new_record,additional,filename)
                     elif (indx == "rtree"):
@@ -249,7 +273,18 @@ class File:
             indx = self.indexes[field]["index"]
 
             if (indx  == "hash"):
-                self.p_print("hash", additional, filename) 
+                h = ExtendibleHashingFile(filename)
+                hit = h.find(value, key_name=field)
+                records = []
+                if hit:
+                    if self.indexes["primary"]["index"] == "heap":
+                        # Para heap devolvemos posiciones (enteros)
+                        if "pos" in hit:
+                            records = [hit["pos"]]
+                    else:
+                        # Para primarios no-heap devolvemos dict con PK
+                        records = [hit]
+                #self.p_print("hash", additional, filename)
             elif (indx == "b+"):
                 self.p_print("b+", additional, filename)
             elif (indx == "rtree"):
@@ -449,13 +484,37 @@ class File:
             search_index = self.indexes[field]["index"]
             filename = self.indexes[field]["filename"]
 
-            if (search_index  == "hash"):
-                self.p_print("hash",additional,filename) 
+            if (search_index == "hash"):
+                h = ExtendibleHashingFile(filename)
+                hit = h.find(value, key_name=field)
+                records = []
+                if hit:
+                    if self.indexes["primary"]["index"] == "heap":
+                        # devolver posiciones para borrar directo en heap
+                        if "pos" in hit:
+                            records = [hit["pos"]]
+                    else:
+                        # devolver dict con PK para borrar en primarios no-heap
+                        records = [hit]
+
             elif (search_index == "b+"):
-                self.p_print("b+", additional,filename) 
+                # (sigue pendiente implementar b+, por ahora solo log)
+                self.p_print("b+", additional, filename)
+
             elif (search_index == "rtree"):
-                self.p_print("rtree", additional,filename)
-            
+                is_heap = (self.indexes["primary"]["index"] == "heap")
+                rt = self._make_rtree(field, heap_ok=is_heap)
+                items = []
+                # igualdad por punto: value = [x, y] o (x, y)
+                if isinstance(value, (list, tuple)) and len(value) >= 2:
+                    x, y = float(value[0]), float(value[1])
+                    eps = 1e-9
+                    items = rt.search_rect(x - eps, x + eps, y - eps, y + eps)
+                # o rect explícito: value = {"xmin","xmax","ymin","ymax"}
+                elif isinstance(value, dict) and {"xmin", "xmax", "ymin", "ymax"} <= set(value.keys()):
+                    items = rt.search_rect(value["xmin"], value["xmax"], value["ymin"], value["ymax"])
+                # bridge a filas o a PKs según primario
+                records = items if is_heap else self._bridge_from_rtree(items)
 
             if mainindx == "heap":
 
@@ -503,7 +562,23 @@ class File:
                         additional["unique"] = True
                 
                 if (indx  == "hash"):
-                    self.p_print("hash",additional,filename) 
+                    h = ExtendibleHashingFile(filename)
+                    for rec in records:
+                        # rec puede ser (row_dict, pos) o dict
+                        if isinstance(rec, tuple) and len(rec) >= 2:
+                            row_dict = rec[0]
+                            if index in row_dict:
+                                try:
+                                    h.remove(row_dict[index], key_name=index)
+                                except:
+                                    pass
+                        elif isinstance(rec, dict):
+                            if index in rec:
+                                try:
+                                    h.remove(rec[index], key_name=index)
+                                except:
+                                    pass
+                    #self.p_print("hash",additional,filename)
                 elif (indx == "b+"):
                     self.p_print("b+", additional,filename)
                 elif (indx == "rtree"):
