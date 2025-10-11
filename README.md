@@ -1,4 +1,4 @@
-# Proyecto BD2
+# Proyecto BDII
 
 Sistema de base de datos relacional con aplicación de índices
 
