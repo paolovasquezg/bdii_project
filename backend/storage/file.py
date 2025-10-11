@@ -638,6 +638,32 @@ class File:
                     inserted += 1
             return {"count": inserted}
 
+        elif params["op"] == "scan":
+            # Lee todas las filas (cualquier primario) usando el header del archivo
+            import json as _json, struct
+            from backend.core.utils import build_format
+            from backend.core.record import Record
+
+            mainfilename = self.indexes["primary"]["filename"]
+            records = []
+            with open(mainfilename, "rb") as f:
+                # header: [uint32 schema_len][schema_json][...registros...]
+                slen = struct.unpack("I", f.read(4))[0]
+                schema = _json.loads(f.read(slen).decode("utf-8"))
+                fmt = build_format(schema)
+                rec_size = struct.calcsize(fmt)
+                end = f.seek(0, 2)         # EOF
+                f.seek(4 + slen)           # inicio de datos
+
+                while f.tell() < end:
+                    chunk = f.read(rec_size)
+                    if not chunk or len(chunk) < rec_size:
+                        break
+                    rec = Record.unpack(chunk, fmt, schema).fields
+                    if rec.get("deleted"):
+                        continue
+                    records.append(rec)
+            return records
 
 
 

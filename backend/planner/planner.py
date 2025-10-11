@@ -67,36 +67,53 @@ class Planner:
 
             elif k == "insert":
                 cols = d.get("columns")
-                vals = d.get("values")
-                # Soportamos single-row INSERT
-                if isinstance(vals, list) and (not vals or not isinstance(vals[0], (list, tuple))):
-                    row = vals
-                elif isinstance(vals, list) and vals and isinstance(vals[0], (list, tuple)):
-                    row = list(vals[0])
+
+                # Normaliza a una lista de filas (rows)
+                rows = []
+                if isinstance(d.get("rows"), list) and d["rows"]:
+                    rows = [list(r) for r in d["rows"]]
                 else:
-                    row = [vals]
-                if cols is None:
-                    plans.append({
-                        "action": "insert",
-                        "table": d["table"],
-                        "record": row,
-                        "record_is_positional": True
-                    })
-                else:
-                    plans.append({
-                        "action": "insert",
-                        "table": d["table"],
-                        "record": {c: v for c, v in zip(cols, row)}
-                    })
+                    vals = d.get("values")
+                    if vals is None:
+                        rows = []
+                    elif isinstance(vals, list) and vals and isinstance(vals[0], (list, tuple)):
+                        rows = [list(v) for v in vals]   # lista de listas
+                    else:
+                        rows = [vals]                    # una sola fila
+
+                for row in rows:
+                    if cols is None:
+                        plans.append({
+                            "action": "insert",
+                            "table": d["table"],
+                            "record": row,
+                            "record_is_positional": True
+                        })
+                    else:
+                        plans.append({
+                            "action": "insert",
+                            "table": d["table"],
+                            "record": {c: v for c, v in zip(cols, row)}
+                        })
 
             elif k == "select":
                 table = d["table"]
                 where = d.get("where")
-                if where is None:
-                    raise NotImplementedError("SELECT sin WHERE no está planificado aún")
+                cols = d.get("columns")  # None para '*', o lista de columnas
 
+                # Caso 1: sin WHERE -> usa scan (lo atenderá el executor en la acción 'select')
+                if where is None:
+                    plans.append({
+                        "action": "select",
+                        "table": table,
+                        "columns": cols,
+                        "where": None
+                    })
+                    continue
+
+                # Caso 2: con WHERE -> conserva rutas aceleradas como ya tenías
                 # BETWEEN: {'ident','lo','hi'}
-                if isinstance(where, dict) and {"ident","lo","hi"} <= set(where.keys()):
+                if isinstance(where, dict) and {"ident", "lo", "hi"} <= set(where.keys()):
                     plans.append({
                         "action": "range search",
                         "table": table,
@@ -137,10 +154,12 @@ class Planner:
                     else:
                         raise NotImplementedError("GeoWithin requiere POINT(x,y) como centro")
 
-                # BETWEEN AND igualdad (AND con 2 items) — preservo tu caso especial
+                # BETWEEN AND igualdad (AND con 2 items)
                 elif isinstance(where, dict) and where.get("op") == "AND" and len(where.get("items", [])) == 2:
                     a, b = where["items"]
-                    if isinstance(a, dict) and {"ident","lo","hi"} <= set(a.keys()) and isinstance(b, dict) and b.get("op") == "=":
+                    if isinstance(a, dict) and {"ident", "lo", "hi"} <= set(a.keys()) and isinstance(b,
+                                                                                                     dict) and b.get(
+                            "op") == "=":
                         plans.append({
                             "action": "range search",
                             "table": table,
