@@ -78,11 +78,16 @@ def create_table(table: str, fields: List[Dict]):
         for sch in new_schema:
             if sch["name"] == col:
                 idx_schema = [sch]
-                pk_spec = new_fields[pk_name]
-                if "length" in pk_spec:
-                    idx_schema.append({"name": "pk", "type": pk_spec["type"], "length": pk_spec["length"]})
+                primary_index_type = indexes.get("primary", {}).get("index", "heap")
+                if primary_index_type == "heap":
+                    idx_schema.append({"name": "pos", "type": "i"})
                 else:
-                    idx_schema.append({"name": "pk", "type": pk_spec["type"]})
+                    pk_spec = new_fields[pk_name]
+                    if "length" in pk_spec:
+                        idx_schema.append({"name": "pk", "type": pk_spec["type"], "length": pk_spec["length"]})
+                    else:
+                        idx_schema.append({"name": "pk", "type": pk_spec["type"]})
+
                 idx_schema.append({"name": "deleted", "type": "?"})
                 put_json(info["filename"], [idx_schema])
                 break
