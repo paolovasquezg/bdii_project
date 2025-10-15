@@ -4,15 +4,15 @@ Sistema de base de datos relacional con aplicación de índices
 
 ## Ejecutar el Proyecto
 
-Para ejecutar tanto el frontend como el backend:
+Por defecto usamos Docker para aislar dependencias y evitar problemas de versiones. Ejecute:
 
 ```bash
 make
 ```
 
-Este comando instalará automáticamente las dependencias y ejecutará ambos servicios:
+Esto construirá las imágenes y levantará ambos servicios:
+
 - **Backend**: `http://127.0.0.1:8000`
 - **Frontend**: `http://localhost:5173`
 
 
-Para más detalles, consulta el README en cada directorio.
