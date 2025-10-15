@@ -4,7 +4,7 @@ Sistema de base de datos relacional con aplicación de índices
 
 ## Ejecutar el Proyecto
 
-Por defecto usamos Docker para aislar dependencias y evitar problemas de versiones. Ejecute:
+Por defecto usamos Docker para aislar dependencias y evitar problemas de versiones. Ejecute
 
 ```bash
 make
