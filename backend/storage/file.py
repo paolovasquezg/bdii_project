@@ -10,8 +10,10 @@ import struct
 from backend.core.utils import build_format
 from backend.core.record import Record
 import os
+import copy
 
 DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
+
 
 class File:
     # ------------------------------ helpers de catálogo ------------------------------ #
@@ -39,7 +41,74 @@ class File:
         self.primary_key = self.get_pk()
         self.table = table
 
-    # ------------------------------ helpers de tipos/rtree ------------------------------ #
+        # ---- Acumulador de I/O por operación ----
+        self._io = self._new_io()
+        self.last_io = self._new_io()
+
+        # ---- Traza de uso de índices por operación ----
+        self._index_usage = []
+
+    # ------------------------------ IO accounting ------------------------------------ #
+
+    def _new_io(self):
+        zero = {"read_count": 0, "write_count": 0}
+        return {
+            "heap": dict(zero),
+            "sequential": dict(zero),
+            "isam": dict(zero),
+            "bplus": dict(zero),
+            "hash": dict(zero),
+            "rtree": dict(zero),
+            "total": dict(zero),
+        }
+
+    def io_reset(self):
+        """Resetea contadores de I/O de la operación actual."""
+        self._io = self._new_io()
+        self.last_io = self._new_io()
+
+    def io_merge(self, obj, kind: str):
+        """Acumula read_count/write_count de un objeto índice en self._io."""
+        if obj is None:
+            return
+        rc = int(getattr(obj, "read_count", 0) or 0)
+        wc = int(getattr(obj, "write_count", 0) or 0)
+        if kind not in self._io:
+            return
+        self._io[kind]["read_count"] += rc
+        self._io[kind]["write_count"] += wc
+        self._io["total"]["read_count"] += rc
+        self._io["total"]["write_count"] += wc
+
+    def io_get(self):
+        """Copia (deep) de los contadores actuales."""
+        return copy.deepcopy(self._io)
+
+    # ------------------------------ Index usage tracking ----------------------------- #
+
+    def index_reset(self):
+        """Resetea la lista de usos de índices de la operación actual."""
+        self._index_usage = []
+
+    def index_log(self, where: str, index_kind: str, field: str, op: str, note: str | None = None):
+        """Registra un uso de índice para exponerlo en meta.index_usage."""
+        try:
+            self._index_usage.append({
+                "where": str(where),               # "primary" | "secondary"
+                "index": str(index_kind or ""),    # heap/sequential/isam/bplus/hash/rtree
+                "field": str(field or ""),
+                "op": str(op or ""),
+                **({"note": str(note)} if note else {})
+            })
+        except Exception:
+            # nunca romper por telemetría
+            pass
+
+    def index_get(self):
+        """Copia (deep) de la lista de usos de índices de la operación actual."""
+        return copy.deepcopy(self._index_usage)
+
+    # ------------------------------ helpers de tipos/rtree --------------------------- #
 
     def _coerce_types(self, rec: dict) -> dict:
         """Castea valores a los tipos declarados en el schema (int/float/bool)."""
@@ -125,7 +194,10 @@ class File:
             if not pos_list:
                 return []
             hf = HeapFile(self.indexes["primary"]["filename"])
-            return hf.search_by_pos(pos_list)
+            out = hf.search_by_pos(pos_list)
+            self.io_merge(hf, "heap")
+            self.index_log("primary", "heap", self.primary_key, "search_by_pos")
+            return out
 
         # Primario NO-HEAP: 'pos' representa PK → resolver por PK
         out = []
@@ -143,6 +215,7 @@ class File:
             # Para HEAP/SEQ/B+ → reusar insert por cada fila.
             for record in params["records"]:
                 self.insert({"op": "insert", "record": record})
+            self.last_io = self.io_get()
             return
 
         # Ruta especial: primario ISAM → construye base y luego secundarios
@@ -163,6 +236,8 @@ class File:
         # Construir el archivo ISAM principal; 'records' queda como lista de dicts completos
         BuildFile = IsamFile(mainfilename)
         records = BuildFile.build(params["records"], additional)
+        self.io_merge(BuildFile, "isam")
+        self.index_log("primary", "isam", self.primary_key, "build")
 
         # Poblar índices secundarios (cada bloque protegido)
         for index in self.indexes:
@@ -180,6 +255,8 @@ class File:
                             continue
                         h.insert({"pk": rec[self.primary_key], index: rec[index], "deleted": False},
                                  key_name=index)
+                    self.io_merge(h, "hash")
+                    self.index_log("secondary", "hash", index, "build")
                 except Exception as e:
                     if DEBUG_IDX: print("[HASH build secondary] skip:", e)
 
@@ -191,6 +268,8 @@ class File:
                             continue
                         in_rec = {index: rec[index], "pk": rec[self.primary_key], "deleted": False}
                         bp.insert(in_rec, {"key": index})
+                    self.io_merge(bp, "bplus")
+                    self.index_log("secondary", "bplus", index, "build")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS build secondary] skip:", e)
 
@@ -205,8 +284,12 @@ class File:
                             continue
                         in_rec = {"pos": rec[self.primary_key], index: pt, "deleted": False}
                         rt.insert(in_rec)
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", index, "build")
                 except Exception as e:
                     if DEBUG_IDX: print("[RTREE build secondary] skip:", e)
+
+        self.last_io = self.io_get()
 
     # ----------------------------------- DML insert ---------------------------------- #
 
@@ -231,18 +314,30 @@ class File:
         # 2) Insertar en PRIMARIO
         maindex = self.indexes["primary"]["index"]
         if maindex == "heap":
-            records = HeapFile(mainfilename).insert(record, additional)              # → [(row_dict, pos), ...]
+            hf = HeapFile(mainfilename)
+            records = hf.insert(record, additional)              # → [(row_dict, pos), ...]
+            self.io_merge(hf, "heap")
+            self.index_log("primary", "heap", self.primary_key, "insert")
         elif maindex == "sequential":
-            records = SeqFile(mainfilename).insert(record, additional)
+            sf = SeqFile(mainfilename)
+            records = sf.insert(record, additional)
+            self.io_merge(sf, "sequential")
+            self.index_log("primary", "sequential", self.primary_key, "insert")
         elif maindex == "isam":
-            records = IsamFile(mainfilename).insert(record, additional)
+            isf = IsamFile(mainfilename)
+            records = isf.insert(record, additional)
+            self.io_merge(isf, "isam")
+            self.index_log("primary", "isam", self.primary_key, "insert")
         elif maindex == "b+":
-            BPlusFile(mainfilename).insert(record, {"key": self.primary_key})
-            records = [record]                                                       # → [row_dict]
+            bp = BPlusFile(mainfilename)
+            bp.insert(record, {"key": self.primary_key})
+            records = [record]                                   # → [row_dict]
+            self.io_merge(bp, "bplus")
+            self.index_log("primary", "bplus", self.primary_key, "insert")
         else:
             records = []
 
-        # 3) Replicar en SECUNDARIOS (protegidos; si algo falla, no rompe el DML)
+        # 3) Replicar en SECUNDARIOS (protegidos)
         if len(records) >= 1:
             for index in self.indexes:
                 if index == "primary" or self.indexes[index]["filename"] == mainfilename:
@@ -268,6 +363,8 @@ class File:
                                     continue
                                 rec = {"pk": row_dict[self.primary_key], index: row_dict[index], "deleted": False}
                                 h.insert(rec, key_name=index)
+                        self.io_merge(h, "hash")
+                        self.index_log("secondary", "hash", index, "insert")
                     except Exception as e:
                         if DEBUG_IDX: print("[HASH insert secondary] skip:", e)
 
@@ -286,6 +383,8 @@ class File:
                                     continue
                                 rec = {index: row_dict[index], "pk": row_dict[self.primary_key], "deleted": False}
                                 bp.insert(rec, {"key": index})
+                        self.io_merge(bp, "bplus")
+                        self.index_log("secondary", "bplus", index, "insert")
                     except Exception as e:
                         if DEBUG_IDX: print("[BPLUS insert secondary] skip:", e)
 
@@ -313,10 +412,12 @@ class File:
                                     continue
                                 in_rec = {"pos": row_dict[self.primary_key], index: pt, "deleted": False}
                                 rt.insert(in_rec)
+                        self.io_merge(rt, "rtree")
+                        self.index_log("secondary", "rtree", index, "insert")
                     except Exception as e:
                         if DEBUG_IDX: print("[RTREE insert secondary] skip:", e)
 
-        # Devolver 'records' para que el executor compute meta.affected
+        self.last_io = self.io_get()
         return records
 
     # ----------------------------------- DML search ---------------------------------- #
@@ -349,21 +450,36 @@ class File:
         if mainindex:
             # ----------- búsqueda en PRIMARIO -----------
             if mainindx == "heap":
-                records = HeapFile(mainfilename).search(additional)
+                hf = HeapFile(mainfilename)
+                records = hf.search(additional)
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", field, "search", note="same_key" if same_key else "scan")
+
             elif mainindx == "sequential":
-                records = SeqFile(mainfilename).search(additional, same_key)
+                sf = SeqFile(mainfilename)
+                records = sf.search(additional, same_key)
+                self.io_merge(sf, "sequential")
+                self.index_log("primary", "sequential", field, "search", note="same_key" if same_key else "scan")
+
             elif mainindx == "isam":
-                records = IsamFile(mainfilename).search(additional, same_key)
+                isf = IsamFile(mainfilename)
+                records = isf.search(additional, same_key)
+                self.io_merge(isf, "isam")
+                self.index_log("primary", "isam", field, "search", note="same_key" if same_key else "scan")
+
             elif mainindx == "b+":
                 try:
                     bp = BPlusFile(mainfilename)
                     if field == self.primary_key:
                         hits = bp.search({"key": field, "value": value})
                         records = [hits] if isinstance(hits, dict) else (hits or [])
+                        self.index_log("primary", "bplus", field, "search")
                     else:
                         # Fallback: escaneo completo si el campo no es PK
                         rows = self.execute({"op": "scan"}) or []
                         records = [r for r in rows if isinstance(r, dict) and r.get(field) == value]
+                        self.index_log("primary", "bplus", field, "scan_fallback")
+                    self.io_merge(bp, "bplus")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS search primary] skip:", e)
                     records = []
@@ -383,6 +499,8 @@ class File:
                                 records = [{"pos": hit["pos"]}]
                         else:
                             records = [hit]
+                    self.io_merge(h, "hash")
+                    self.index_log("secondary", "hash", field, "search")
                 except Exception as e:
                     if DEBUG_IDX: print("[HASH search secondary] skip:", e)
                     records = []
@@ -398,6 +516,8 @@ class File:
                                 records.append({"pos": h["pos"]})
                     else:
                         records = hits or []
+                    self.io_merge(bp, "bplus")
+                    self.index_log("secondary", "bplus", field, "search")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS search secondary] skip:", e)
                     records = []
@@ -412,16 +532,22 @@ class File:
                     is_heap = (self.indexes["primary"]["index"] == "heap")
                     rt = self._make_rtree(field, heap_ok=is_heap)
                     items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", field, "range_rect")
                     return self._bridge_from_rtree(items)
                 except Exception as e:
                     if DEBUG_IDX: print("[RTREE search secondary] skip:", e)
                     return []
 
-            # Si primario es HEAP y lo que tenemos son posiciones → resolver a filas
+            # Resolver a filas según primario
             if self.indexes["primary"]["index"] == "heap":
-                return HeapFile(mainfilename).search_by_pos(self._posify(records))
+                hf = HeapFile(mainfilename)
+                out = hf.search_by_pos(self._posify(records))
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", self.primary_key, "search_by_pos")
+                self.last_io = self.io_get()
+                return out
 
-            # Si primario NO es HEAP → resolver a filas por PK
             ret_records = []
             for rec in records:
                 ret_records.extend(
@@ -429,6 +555,7 @@ class File:
                 )
             records = ret_records
 
+        self.last_io = self.io_get()
         return records
 
     # ------------------------------- DML range_search ------------------------------- #
@@ -454,24 +581,38 @@ class File:
             # ----------- rango en PRIMARIO -----------
             if mainindx == "heap":
                 additional["min"] = params["min"]; additional["max"] = params["max"]
-                records = HeapFile(mainfilename).range_search(additional)
+                hf = HeapFile(mainfilename)
+                records = hf.range_search(additional)
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", field, "range_search", note="same_key" if same_key else "scan")
             elif mainindx == "sequential":
                 additional["min"] = params["min"]; additional["max"] = params["max"]
-                records = SeqFile(mainfilename).range_search(additional, same_key)
+                sf = SeqFile(mainfilename)
+                records = sf.range_search(additional, same_key)
+                self.io_merge(sf, "sequential")
+                self.index_log("primary", "sequential", field, "range_search", note="same_key" if same_key else "scan")
             elif mainindx == "isam":
                 additional["min"] = params["min"]; additional["max"] = params["max"]
-                records = IsamFile(mainfilename).range_search(additional, same_key)
+                isf = IsamFile(mainfilename)
+                records = isf.range_search(additional, same_key)
+                self.io_merge(isf, "isam")
+                self.index_log("primary", "isam", field, "range_search", note="same_key" if same_key else "scan")
             elif mainindx == "b+":
                 try:
                     bp = BPlusFile(mainfilename)
                     if field == self.primary_key:
                         records = bp.range_search({"key": field, "min": params["min"], "max": params["max"]})
+                        self.index_log("primary", "bplus", field, "range_search")
                     else:
                         # Fallback por escaneo si no es PK
                         lo, hi = params["min"], params["max"]
                         rows = self.execute({"op": "scan"}) or []
+
                         def in_range(v): return v is not None and lo <= v <= hi
+
                         records = [r for r in rows if isinstance(r, dict) and in_range(r.get(field))]
+                        self.index_log("primary", "bplus", field, "scan_fallback")
+                    self.io_merge(bp, "bplus")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS range_search primary] skip:", e)
                     records = []
@@ -484,11 +625,18 @@ class File:
                 try:
                     bp = BPlusFile(filename)
                     hits = bp.range_search({"key": field, "min": params["min"], "max": params["max"]})
+                    self.io_merge(bp, "bplus")
+                    self.index_log("secondary", "bplus", field, "range_search")
                     if self.indexes["primary"]["index"] == "heap":
                         # Resolver posiciones a filas
-                        return HeapFile(mainfilename).search_by_pos(
+                        hf = HeapFile(mainfilename)
+                        out = hf.search_by_pos(
                             self._posify([h["pos"] for h in (hits or []) if isinstance(h, dict) and "pos" in h])
                         )
+                        self.io_merge(hf, "heap")
+                        self.index_log("primary", "heap", self.primary_key, "search_by_pos")
+                        self.last_io = self.io_get()
+                        return out
                     else:
                         records = hits or []
                 except Exception as e:
@@ -506,14 +654,25 @@ class File:
                     is_heap = (self.indexes["primary"]["index"] == "heap")
                     rt = self._make_rtree(field, heap_ok=is_heap)
                     items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
-                    return self._bridge_from_rtree(items)
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", field, "range_rect")
+                    out = self._bridge_from_rtree(items)
+                    self.last_io = self.io_get()
+                    return out
                 except Exception as e:
                     if DEBUG_IDX: print("[RTREE range_search secondary] skip:", e)
+                    self.last_io = self.io_get()
                     return []
 
             # Resolver a filas igual que en search()
             if self.indexes["primary"]["index"] == "heap":
-                return HeapFile(mainfilename).search_by_pos(self._posify(records))
+                hf = HeapFile(mainfilename)
+                out = hf.search_by_pos(self._posify(records))
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", self.primary_key, "search_by_pos")
+                self.last_io = self.io_get()
+                return out
+
             ret_records = []
             for rec in records:
                 ret_records.extend(
@@ -521,6 +680,7 @@ class File:
                 )
             records = ret_records
 
+        self.last_io = self.io_get()
         return records
 
     # ----------------------------------- DML knn ------------------------------------ #
@@ -529,18 +689,26 @@ class File:
         """k-NN sobre un índice R-Tree secundario. Siempre protegido."""
         field = params["field"]
         if field not in self.indexes:
+            self.last_io = self.io_get()
             return []
         if "key" in self.relation.get(field, {}) and self.relation[field]["key"] == "primary":
+            self.last_io = self.io_get()
             return []
         if self.indexes[field]["index"] != "rtree":
+            self.last_io = self.io_get()
             return []
         try:
             is_heap = (self.indexes["primary"]["index"] == "heap")
             rt = self._make_rtree(field, heap_ok=is_heap)
             items = rt.knn(params["point"][0], params["point"][1], params["k"])
-            return self._bridge_from_rtree(items)
+            self.io_merge(rt, "rtree")
+            self.index_log("secondary", "rtree", field, "knn")
+            out = self._bridge_from_rtree(items)
+            self.last_io = self.io_get()
+            return out
         except Exception as e:
             if DEBUG_IDX: print("[RTREE knn] skip:", e)
+            self.last_io = self.io_get()
             return []
 
     # ----------------------------------- DML remove --------------------------------- #
@@ -572,25 +740,41 @@ class File:
         # 1) Borrado en PRIMARIO o selección de víctimas por SECUNDARIO
         if mainindex:
             if mainindx == "heap":
-                records = HeapFile(mainfilename).remove(additional)
+                hf = HeapFile(mainfilename)
+                records = hf.remove(additional)  # -> [(row_dict, pos), ...]
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", field, "remove", note="same_key" if same_key else "scan")
+
             elif mainindx == "sequential":
-                records = SeqFile(mainfilename).remove(additional, same_key)
+                sf = SeqFile(mainfilename)
+                records = sf.remove(additional, same_key)
+                self.io_merge(sf, "sequential")
+                self.index_log("primary", "sequential", field, "remove", note="same_key" if same_key else "scan")
+
             elif mainindx == "isam":
-                records = IsamFile(mainfilename).remove(additional, same_key)
+                isf = IsamFile(mainfilename)
+                records = isf.remove(additional, same_key)
+                self.io_merge(isf, "isam")
+                self.index_log("primary", "isam", field, "remove", note="same_key" if same_key else "scan")
+
             elif mainindx == "b+":
                 try:
                     bp = BPlusFile(mainfilename)
                     if field == self.primary_key:
                         bp.remove({"key": self.primary_key, "value": value})
                         records = [{self.primary_key: value}]
+                        self.index_log("primary", "bplus", field, "remove")
                     else:
-                        victims = [r for r in (self.execute({"op": "scan"}) or []) if isinstance(r, dict) and r.get(field) == value]
+                        victims = [r for r in (self.execute({"op": "scan"}) or []) if
+                                   isinstance(r, dict) and r.get(field) == value]
+                        self.index_log("primary", "bplus", field, "scan_fallback")
                         for v in victims:
                             try:
                                 bp.remove({"key": self.primary_key, "value": v[self.primary_key]})
                             except Exception:
                                 pass
                         records = victims
+                    self.io_merge(bp, "bplus")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS remove primary] skip:", e)
                     records = []
@@ -607,6 +791,8 @@ class File:
                             records = [hit["pos"]]
                         else:
                             records = [hit]
+                    self.io_merge(h, "hash")
+                    self.index_log("secondary", "hash", field, "search_for_remove")
                 elif search_index == "b+":
                     bp = BPlusFile(filename)
                     hits = bp.search({"key": field, "value": value}) or []
@@ -614,6 +800,8 @@ class File:
                         records = [h["pos"] for h in hits if isinstance(h, dict) and "pos" in h]
                     else:
                         records = hits
+                    self.io_merge(bp, "bplus")
+                    self.index_log("secondary", "bplus", field, "search_for_remove")
                 elif search_index == "rtree":
                     is_heap = (mainindx == "heap")
                     rt = self._make_rtree(field, heap_ok=is_heap)
@@ -623,6 +811,8 @@ class File:
                         items = rt.search_rect(x-eps, x+eps, y-eps, y+eps)
                     elif isinstance(value, dict) and {"xmin","xmax","ymin","ymax"} <= set(value.keys()):
                         items = rt.search_rect(value["xmin"], value["xmax"], value["ymin"], value["ymax"])
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", field, "search_for_remove")
                     records = self._bridge_from_rtree(items)
             except Exception as e:
                 if DEBUG_IDX: print("[SECONDARY pre-remove] skip:", e)
@@ -630,7 +820,12 @@ class File:
 
             # Aplicar eliminación en PRIMARIO con las víctimas halladas
             if mainindx == "heap":
-                return HeapFile(mainfilename).delete_by_pos(self._posify(records))
+                hf = HeapFile(mainfilename)
+                out = hf.delete_by_pos(self._posify(records))
+                self.io_merge(hf, "heap")
+                self.index_log("primary", "heap", self.primary_key, "delete_by_pos")
+                self.last_io = self.io_get()
+                return out
             else:
                 temp_records = []
                 if mainindx == "b+":
@@ -645,6 +840,8 @@ class File:
                                 temp_records.append(rec)
                             except Exception:
                                 pass
+                        self.io_merge(bp, "bplus")
+                        self.index_log("primary", "bplus", self.primary_key, "remove_by_pk")
                     except Exception as e:
                         if DEBUG_IDX: print("[BPLUS remove primary apply] skip:", e)
                 else:
@@ -654,9 +851,15 @@ class File:
                             continue
                         add = {"key": self.primary_key, "value": pk, "unique": True}
                         if mainindx == "sequential":
-                            temp_records.extend(SeqFile(mainfilename).remove(add, True))
+                            sf = SeqFile(mainfilename)
+                            temp_records.extend(sf.remove(add, True))
+                            self.io_merge(sf, "sequential")
+                            self.index_log("primary", "sequential", self.primary_key, "remove_by_pk")
                         elif mainindx == "isam":
-                            temp_records.extend(IsamFile(mainfilename).remove(add, True))
+                            isf = IsamFile(mainfilename)
+                            temp_records.extend(isf.remove(add, True))
+                            self.io_merge(isf, "isam")
+                            self.index_log("primary", "isam", self.primary_key, "remove_by_pk")
                 records = temp_records
 
         # 2) Limpiar SECUNDARIOS (protegido; cualquier error se ignora)
@@ -678,6 +881,8 @@ class File:
                         elif isinstance(rec, dict) and index in rec:   # dict
                             try: h.remove(rec[index], key_name=index)
                             except Exception: pass
+                    self.io_merge(h, "hash")
+                    self.index_log("secondary", "hash", index, "cleanup_after_remove")
                 except Exception as e:
                     if DEBUG_IDX: print("[HASH remove secondary] skip:", e)
 
@@ -693,6 +898,8 @@ class File:
                         elif isinstance(rec, dict) and index in rec:
                             try: bp.remove({"key": index, "value": rec[index]})
                             except Exception: pass
+                    self.io_merge(bp, "bplus")
+                    self.index_log("secondary", "bplus", index, "cleanup_after_remove")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS remove secondary] skip:", e)
 
@@ -713,16 +920,21 @@ class File:
                             if pos is None or not ok: continue
                             try: rt.remove({"pos": pos, index: pt})
                             except Exception: pass
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", index, "cleanup_after_remove")
                 except Exception as e:
                     if DEBUG_IDX: print("[RTREE remove secondary] skip:", e)
 
-        # Devolver lista de afectados (para meta.affected)
+        self.last_io = self.io_get()
+        # 3) Devuelve los afectados para que el executor ponga meta.affected
         return records
 
     # ----------------------------------- execute ------------------------------------ #
 
     def execute(self, params: dict):
         """Multiplexor de operaciones."""
+        # No hago io_reset aquí; el Executor decide los límites de medición.
+
         if params["op"] == "build":
             return self.build(params)
 
@@ -750,9 +962,14 @@ class File:
                 is_heap = (self.indexes["primary"]["index"] == "heap")
                 rt = self._make_rtree(field, heap_ok=is_heap)
                 items = rt.range(cx, cy, rr)
-                return self._bridge_from_rtree(items)
+                self.io_merge(rt, "rtree")
+                self.index_log("secondary", "rtree", field, "rtree_within_circle")
+                out = self._bridge_from_rtree(items)
+                self.last_io = self.io_get()
+                return out
             except Exception as e:
                 if DEBUG_IDX: print("[RTREE within_circle] skip:", e)
+                self.last_io = self.io_get()
                 return []
 
         elif params["op"] == "rtree_range":
@@ -763,9 +980,14 @@ class File:
                 is_heap = (self.indexes["primary"]["index"] == "heap")
                 rt = self._make_rtree(field, heap_ok=is_heap)
                 items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
-                return self._bridge_from_rtree(items)
+                self.io_merge(rt, "rtree")
+                self.index_log("secondary", "rtree", field, "rtree_range")
+                out = self._bridge_from_rtree(items)
+                self.last_io = self.io_get()
+                return out
             except Exception as e:
                 if DEBUG_IDX: print("[RTREE range op] skip:", e)
+                self.last_io = self.io_get()
                 return []
 
         elif params["op"] == "import_csv":
@@ -800,6 +1022,7 @@ class File:
                         rec[col] = v
                     self.insert({"record": rec})
                     inserted += 1
+            self.last_io = self.io_get()
             return {"count": inserted}
 
         elif params["op"] == "scan":
@@ -811,7 +1034,11 @@ class File:
                 pk = self.primary_key
                 t = (self.relation.get(pk, {}).get("type") or "").lower()
                 lo, hi = (float("-inf"), float("inf")) if t in ("int", "i", "float", "real", "double", "f") else ("", "\uffff")
-                return bp.range_search({"key": pk, "min": lo, "max": hi})
+                out = bp.range_search({"key": pk, "min": lo, "max": hi})
+                self.io_merge(bp, "bplus")
+                self.index_log("primary", "bplus", pk, "scan_full_range")
+                self.last_io = self.io_get()
+                return out
 
             mainfilename = self.indexes["primary"]["filename"]
             records = []
@@ -832,4 +1059,6 @@ class File:
                     if rec.get("deleted"):
                         continue
                     records.append(rec)
+            self.index_log("primary", main_kind, self.primary_key, "scan")
+            self.last_io = self.io_get()
             return records
