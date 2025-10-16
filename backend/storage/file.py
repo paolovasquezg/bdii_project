@@ -450,22 +450,40 @@ class File:
         if mainindex:
             # ----------- búsqueda en PRIMARIO -----------
             if mainindx == "heap":
-                hf = HeapFile(mainfilename)
-                records = hf.search(additional)
-                self.io_merge(hf, "heap")
-                self.index_log("primary", "heap", field, "search", note="same_key" if same_key else "scan")
+                if same_key:
+                    hf = HeapFile(mainfilename)
+                    records = hf.search(additional)
+                    self.io_merge(hf, "heap")
+                    self.index_log("primary", "heap", field, "search", note="same_key")
+                else:
+                    # Fallback: escaneo completo en primario HEAP y filtrado en memoria
+                    rows = self.execute({"op": "scan"}) or []
+                    records = [r for r in rows if isinstance(r, dict) and r.get(field) == value]
+                    self.index_log("primary", "heap", field, "scan_fallback")
 
             elif mainindx == "sequential":
                 sf = SeqFile(mainfilename)
-                records = sf.search(additional, same_key)
+                if same_key:
+                    records = sf.search(additional, same_key)
+                    note = "same_key"
+                else:
+                    rows = self.execute({"op": "scan"}) or []
+                    records = [r for r in rows if isinstance(r, dict) and r.get(field) == value]
+                    note = "scan_fallback"
                 self.io_merge(sf, "sequential")
-                self.index_log("primary", "sequential", field, "search", note="same_key" if same_key else "scan")
+                self.index_log("primary", "sequential", field, "search", note=note)
 
             elif mainindx == "isam":
                 isf = IsamFile(mainfilename)
-                records = isf.search(additional, same_key)
+                if same_key:
+                    records = isf.search(additional, same_key)
+                    note = "same_key"
+                else:
+                    rows = self.execute({"op": "scan"}) or []
+                    records = [r for r in rows if isinstance(r, dict) and r.get(field) == value]
+                    note = "scan_fallback"
                 self.io_merge(isf, "isam")
-                self.index_log("primary", "isam", field, "search", note="same_key" if same_key else "scan")
+                self.index_log("primary", "isam", field, "search", note=note)
 
             elif mainindx == "b+":
                 try:
@@ -580,23 +598,58 @@ class File:
         if mainindex:
             # ----------- rango en PRIMARIO -----------
             if mainindx == "heap":
-                additional["min"] = params["min"]; additional["max"] = params["max"]
-                hf = HeapFile(mainfilename)
-                records = hf.range_search(additional)
-                self.io_merge(hf, "heap")
-                self.index_log("primary", "heap", field, "range_search", note="same_key" if same_key else "scan")
+                if same_key:
+                    additional["min"] = params["min"]; additional["max"] = params["max"]
+                    hf = HeapFile(mainfilename)
+                    records = hf.range_search(additional)
+                    self.io_merge(hf, "heap")
+                    self.index_log("primary", "heap", field, "range_search", note="same_key")
+                else:
+                    lo, hi = params["min"], params["max"]
+                    rows = self.execute({"op": "scan"}) or []
+                    def in_range(v):
+                        try:
+                            return v is not None and lo <= v <= hi
+                        except Exception:
+                            return False
+                    records = [r for r in rows if isinstance(r, dict) and in_range(r.get(field))]
+                    self.index_log("primary", "heap", field, "scan_fallback_range")
             elif mainindx == "sequential":
-                additional["min"] = params["min"]; additional["max"] = params["max"]
                 sf = SeqFile(mainfilename)
-                records = sf.range_search(additional, same_key)
+                if same_key:
+                    additional["min"] = params["min"]; additional["max"] = params["max"]
+                    records = sf.range_search(additional, same_key)
+                    note = "same_key"
+                else:
+                    lo, hi = params["min"], params["max"]
+                    rows = self.execute({"op": "scan"}) or []
+                    def in_range(v):
+                        try:
+                            return v is not None and lo <= v <= hi
+                        except Exception:
+                            return False
+                    records = [r for r in rows if isinstance(r, dict) and in_range(r.get(field))]
+                    note = "scan_fallback_range"
                 self.io_merge(sf, "sequential")
-                self.index_log("primary", "sequential", field, "range_search", note="same_key" if same_key else "scan")
+                self.index_log("primary", "sequential", field, "range_search", note=note)
             elif mainindx == "isam":
-                additional["min"] = params["min"]; additional["max"] = params["max"]
                 isf = IsamFile(mainfilename)
-                records = isf.range_search(additional, same_key)
+                if same_key:
+                    additional["min"] = params["min"]; additional["max"] = params["max"]
+                    records = isf.range_search(additional, same_key)
+                    note = "same_key"
+                else:
+                    lo, hi = params["min"], params["max"]
+                    rows = self.execute({"op": "scan"}) or []
+                    def in_range(v):
+                        try:
+                            return v is not None and lo <= v <= hi
+                        except Exception:
+                            return False
+                    records = [r for r in rows if isinstance(r, dict) and in_range(r.get(field))]
+                    note = "scan_fallback_range"
                 self.io_merge(isf, "isam")
-                self.index_log("primary", "isam", field, "range_search", note="same_key" if same_key else "scan")
+                self.index_log("primary", "isam", field, "range_search", note=note)
             elif mainindx == "b+":
                 try:
                     bp = BPlusFile(mainfilename)

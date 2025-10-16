@@ -386,10 +386,33 @@ class Executor:
                         elif isinstance(res, list):
                             affected = len(res)
                         io = F.io_get(); idx = F.index_get()
-                        results.append(ok_result(action, table,
-                                                 meta={"affected": affected, "io": io, "index_usage": idx},
-                                                 message=_msg_for("insert", affected=affected),
-                                                 t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                        if affected == 0:
+                            # Intentar identificar la PK para mensaje más claro
+                            try:
+                                meta = table_meta_path(table)
+                                relation, _ = get_json(str(meta), 2)
+                                pk_name = None
+                                if isinstance(relation, dict):
+                                    for col, spec in relation.items():
+                                        if isinstance(spec, dict) and (spec.get("key") == "primary"):
+                                            pk_name = col; break
+                                else:
+                                    for spec in (relation or []):
+                                        if isinstance(spec, dict) and (spec.get("key") == "primary"):
+                                            pk_name = spec.get("name"); break
+                                pk_val = rec.get(pk_name) if (pk_name and isinstance(rec, dict)) else None
+                                msg = f"PK duplicada ({pk_name}={pk_val})" if pk_name else "PK duplicada"
+                            except Exception:
+                                msg = "PK duplicada"
+                            results.append(err_result(action, code="DUPLICATE_KEY", message=msg,
+                                                      detail={"plan": p}, plan=plan_safe,
+                                                      t_ms=(perf_counter()-t0)*1000))
+                            overall_ok = False
+                        else:
+                            results.append(ok_result(action, table,
+                                                     meta={"affected": affected, "io": io, "index_usage": idx},
+                                                     message=_msg_for("insert", affected=affected),
+                                                     t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
                     elif action == "remove":
                         F.io_reset(); F.index_reset()
