@@ -69,6 +69,9 @@ class ExtendibleHashingFile:
         self.global_depth = 1
         self.directory = [0, 1]
         self.next_page_idx = 2
+        self.read_count = 0
+        self.write_count = 0
+
 
         self._load_or_init()
 
@@ -88,6 +91,7 @@ class ExtendibleHashingFile:
                 if not header:
                     self._init_file()
                     return
+                self.read_count += 1
                 self.global_depth, self.next_page_idx = struct.unpack('ii', header)
                 dir_size = 1 << self.global_depth
                 dir_bytes = f.read(dir_size * 4)
@@ -105,6 +109,7 @@ class ExtendibleHashingFile:
             f.seek(self._get_page_offset(0))
             f.write(b'\x00' * self.bucket_disk_size)
             f.write(b'\x00' * self.bucket_disk_size)
+            self.write_count += 4
         self._write_bucket_depth(0, 1)
         self._write_bucket_depth(1, 1)
 
@@ -119,6 +124,7 @@ class ExtendibleHashingFile:
             depth_bytes = f.read(4)
             local_depth = struct.unpack('i', depth_bytes)[0]
             data = f.read(self.bucket_disk_size)
+            self.read_count += 1
             return Bucket.unpack(data, local_depth, self.record_size, self.format, self.schema)
 
     def _write_bucket(self, page_idx, bucket):
@@ -127,18 +133,21 @@ class ExtendibleHashingFile:
             f.seek(offset)
             f.write(struct.pack('i', bucket.local_depth))
             f.write(bucket.pack(self.record_size, self.format, self.schema))
+            self.write_count += 1
 
     def _write_bucket_depth(self, page_idx, depth):
         with open(self.filename, 'r+b') as f:
             offset = self._get_page_offset(page_idx)
             f.seek(offset)
             f.write(struct.pack('i', depth))
+            self.write_count += 1
 
     def _write_directory(self):
         with open(self.filename, 'r+b') as f:
             f.seek(0)
             f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
             f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
+            self.write_count += 1
 
     def find(self, key_value, key_name="id"):
         dir_idx = self._get_bucket_idx(key_value)

@@ -1,40 +1,82 @@
 from backend.catalog.catalog import get_json, get_filename
-from backend.storage.primary.heap import HeapFile
-from backend.storage.primary.sequential import SeqFile
-from backend.storage.primary.isam import IsamFile
-from backend.storage.secondary.rtree import RTree
-from backend.storage.secondary.hash import ExtendibleHashingFile
+from backend.storage.indexes.heap import HeapFile
+from backend.storage.indexes.sequential import SeqFile
+from backend.storage.indexes.isam import IsamFile
+from backend.storage.indexes.rtree import RTree
+from backend.storage.indexes.hash import ExtendibleHashingFile
+from backend.storage.indexes.bplus import BPlusFile
+import json as _json
+import struct
+from backend.core.utils import build_format
+from backend.core.record import Record
 import os
 
 DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
 
 class File:
+    # ------------------------------ helpers de catálogo ------------------------------ #
+
     def get_pk(self):
+        """Devuelve el nombre de la columna marcada como PRIMARY KEY en el schema."""
         for field in self.relation:
-            if "key" in self.relation[field] and (self.relation[field]["key"] == "primary"):
+            if "key" in self.relation[field] and self.relation[field]["key"] == "primary":
                 return field
 
     def __init__(self, table: str):
+        """Carga metadatos (schema + índices) y normaliza catálogos viejos."""
         self.filename = get_filename(table)
         self.relation, self.indexes = get_json(self.filename, 2)
+
+        # COMPAT: catálogos antiguos guardaron la PK bajo 'indexes'. Normalizamos a 'primary'.
+        if isinstance(self.indexes, dict) and "primary" not in self.indexes and "indexes" in self.indexes:
+            self.indexes["primary"] = self.indexes.pop("indexes")
+
+        # COMPAT: algunos schemas marcaron key=='indexes' en la columna PK.
+        for col, spec in self.relation.items():
+            if isinstance(spec, dict) and spec.get("key") == "indexes":
+                spec["key"] = "primary"
+
         self.primary_key = self.get_pk()
         self.table = table
 
-    def p_print(self, name, record, additional, filename = ""):
-        if not DEBUG_IDX:
-            return
-        print(name)
-        print(record)
-        print(additional)
-        print(filename)
+    # ------------------------------ helpers de tipos/rtree ------------------------------ #
+
+    def _coerce_types(self, rec: dict) -> dict:
+        """Castea valores a los tipos declarados en el schema (int/float/bool)."""
+        out = dict(rec)
+        for col, spec in self.relation.items():
+            if col not in out:
+                continue
+            v = out[col]
+            t = (spec.get("type") or "").lower()
+            if v is None or v == "":
+                out[col] = None
+            elif t in ("int", "integer", "i"):
+                out[col] = int(v)
+            elif t in ("float", "real", "double", "f"):
+                out[col] = float(v)
+            elif t in ("bool", "boolean"):
+                out[col] = bool(v)
+            # strings/varchar/otros se dejan tal cual
+        return out
+
+    def _posify(self, items):
+        """Normaliza una lista de ints o dicts a [{'pos': int}, ...] para heap.search_by_pos/delete_by_pos."""
+        out = []
+        for it in (items or []):
+            if isinstance(it, int):
+                out.append({"pos": it})
+            elif isinstance(it, dict) and "pos" in it and isinstance(it["pos"], int):
+                out.append({"pos": it["pos"]})
+        return out
 
     def _primary(self):
-        """Devuelve (kind, filename) del índice primario."""
-        p = self.indexes["primary"]
-        return p["index"], p["filename"]
+        """Devuelve (kind, filename) del índice primario (tolerante a catálogos viejos)."""
+        prim = self.indexes.get("primary") or self.indexes.get("indexes") or {}
+        return prim.get("index"), prim.get("filename")
 
     def _make_rtree(self, field: str, *, heap_ok: bool):
-        """Construye el adapter RTree con data_dir derivado del filename del índice."""
+        """Fábrica de RTree asegurando que M sea int y seteando heap_file si aplica."""
         idx_meta = self.indexes[field]
         idx_filename = idx_meta["filename"]
         # data_dir = .../runtime/files   (padre de la carpeta <tabla>/)
@@ -42,144 +84,175 @@ class File:
         return RTree(
             self.table, field, data_dir,
             key=field,
-            M=idx_meta.get("M", 32),
+            M=int(idx_meta.get("M", 32)),  # cast seguro
             heap_file=(self.indexes["primary"]["filename"] if heap_ok else None)
         )
 
-    def _bridge_from_rtree(self, items: list):
-        """Si el primario NO es heap, 'items' trae {'pos': pk}. Los traducimos a filas."""
-        if self.indexes["primary"]["index"] == "heap":
-            # El adapter ya devolvió filas completas del heap
-            return items or []
+    def _as_point(self, v):
+        """Valida/convierte 'v' en punto [x,y] (acepta string JSON '[x,y]')."""
+        import json
+        if isinstance(v, str) and v.startswith("[") and v.endswith("]"):
+            try:
+                v = json.loads(v)
+            except Exception:
+                return False, None
+        if isinstance(v, (list, tuple)) and len(v) >= 2 \
+                and isinstance(v[0], (int, float)) and isinstance(v[1], (int, float)):
+            return True, [float(v[0]), float(v[1])]
+        return False, None
+
+    def _bridge_from_rtree(self, items):
+        """Traduce resultados del R-Tree a filas:
+           - Si primario es HEAP: posiciones → HeapFile.search_by_pos; si ya son filas, devuelve tal cual.
+           - Si primario NO es HEAP: {'pos': pk} → resolver por PK vía search().
+        """
+        if not items:
+            return []
+
+        is_heap = (self.indexes["primary"]["index"] == "heap")
+        if is_heap:
+            sample = items[0]
+            # ¿Ya son filas completas?
+            if isinstance(sample, dict) and any(k in sample for k in self.relation.keys()):
+                return items
+            # Normalizar a [{'pos': int}, ...] + resolver en heap
+            pos_list = []
+            for it in items:
+                if isinstance(it, int):
+                    pos_list.append({"pos": it})
+                elif isinstance(it, dict) and isinstance(it.get("pos"), int):
+                    pos_list.append({"pos": it["pos"]})
+            if not pos_list:
+                return []
+            hf = HeapFile(self.indexes["primary"]["filename"])
+            return hf.search_by_pos(pos_list)
+
+        # Primario NO-HEAP: 'pos' representa PK → resolver por PK
         out = []
-        for it in (items or []):
-            pk = (it or {}).get("pos")
-            if pk is None:
-                continue
-            out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
+        for it in items:
+            if isinstance(it, dict) and "pos" in it:
+                pk = it["pos"]
+                out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
         return out
 
+    # ----------------------------------- DDL build ----------------------------------- #
+
     def build(self, params):
+        """Construye datos iniciales. Si primario es ISAM, usa ruta especial; si no, reusa insert()."""
         if self.indexes["primary"]["index"] != "isam":
+            # Para HEAP/SEQ/B+ → reusar insert por cada fila.
             for record in params["records"]:
-                self.insert({"op": "insert", "record": record})    
-        else:
-            mainfilename = self.indexes["primary"]["filename"]
-            additional = {"key": None, "unique": []}
-            records = []
+                self.insert({"op": "insert", "record": record})
+            return
 
-            for index in self.indexes:
-                if self.indexes[index]["filename"] == mainfilename and index != "primary":
-                    additional["key"] = index
-                    break
-        
-            for field in self.relation:
-                if "key" in self.relation[field] and (self.relation[field]["key"] == "primary" or self.relation[field]["key"] == "unique"):
-                        additional["unique"].append(field)
-            
-            mainfilename = self.indexes["primary"]["filename"]
-
-            BuildFile = IsamFile(mainfilename)
-            records = BuildFile.build(params["records"], additional)
-
-            for index in self.indexes:
-
-                if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
-                    continue
-                
-                filename = self.indexes[index]["filename"]
-                additional = {"key": index}
-
-                for record in records:
-
-                    new_record = {"pk": record[self.primary_key], "deleted": False}
-                    new_record[index] = record[index]
-
-                    indx = self.indexes[index]["index"]
-
-                    if (indx  == "hash"):
-                        h = ExtendibleHashingFile(filename)
-                        # Si el primario es HEAP, 'records' ~ [(row_dict, pos), ...]
-                        if self.indexes["primary"]["index"] == "heap":
-                            for row_dict, pos in records:
-                                if index not in row_dict:
-                                    continue
-                                rec = {"pos": pos, index: row_dict[index], "deleted": False}
-                                h.insert(rec, key_name=index)
-
-                    elif (indx == "b+"):
-                        self.p_print("b+", new_record,additional,filename)
-
-                    elif (indx == "rtree"):
-                        # Construimos el R-Tree usando la PK como 'pos'
-                        idx_filename = self.indexes[index]["filename"]
-                        # data_dir = .../runtime/files (padre de la carpeta <tabla>/)
-                        data_dir = os.path.dirname(os.path.dirname(idx_filename))
-                        rt = RTree(self.table, index, data_dir, key=index, M=self.indexes[index].get("M", 32))
-
-                        for rec in records:  # 'records' aquí son dicts (build ISAM)
-                            if index not in rec:
-                                continue
-                            in_rec = {"pos": rec[self.primary_key], index: rec[index], "deleted": False}
-                            rt.insert(in_rec)
-
-    def insert(self, params):
-        
+        # Ruta especial: primario ISAM → construye base y luego secundarios
         mainfilename = self.indexes["primary"]["filename"]
-        record = params["record"]
-        record["deleted"] = False
         additional = {"key": None, "unique": []}
-        records = []
 
+        # Detectar la columna clave para el ISAM si comparte archivo
         for index in self.indexes:
             if self.indexes[index]["filename"] == mainfilename and index != "primary":
                 additional["key"] = index
                 break
-        
+
+        # Uniques (PK y UNIQUE) para enforcement
         for field in self.relation:
-            if "key" in self.relation[field] and (self.relation[field]["key"] == "primary" or self.relation[field]["key"] == "unique"):
-                    additional["unique"].append(field)
-        
-        maindex = self.indexes["primary"]["index"]
+            if "key" in self.relation[field] and self.relation[field]["key"] in ("primary", "unique"):
+                additional["unique"].append(field)
+
+        # Construir el archivo ISAM principal; 'records' queda como lista de dicts completos
+        BuildFile = IsamFile(mainfilename)
+        records = BuildFile.build(params["records"], additional)
+
+        # Poblar índices secundarios (cada bloque protegido)
+        for index in self.indexes:
+            if index == "primary" or self.indexes[index]["filename"] == mainfilename:
+                continue
+
+            filename = self.indexes[index]["filename"]
+            kind = self.indexes[index]["index"]
+
+            if kind == "hash":
+                try:
+                    h = ExtendibleHashingFile(filename)
+                    for rec in records:  # dicts completos
+                        if index not in rec:
+                            continue
+                        h.insert({"pk": rec[self.primary_key], index: rec[index], "deleted": False},
+                                 key_name=index)
+                except Exception as e:
+                    if DEBUG_IDX: print("[HASH build secondary] skip:", e)
+
+            elif kind == "b+":
+                try:
+                    bp = BPlusFile(filename)
+                    for rec in records:
+                        if index not in rec:
+                            continue
+                        in_rec = {index: rec[index], "pk": rec[self.primary_key], "deleted": False}
+                        bp.insert(in_rec, {"key": index})
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS build secondary] skip:", e)
+
+            elif kind == "rtree":
+                try:
+                    rt = self._make_rtree(index, heap_ok=False)  # ISAM no es heap
+                    for rec in records:
+                        if index not in rec:
+                            continue
+                        ok, pt = self._as_point(rec[index])
+                        if not ok:
+                            continue
+                        in_rec = {"pos": rec[self.primary_key], index: pt, "deleted": False}
+                        rt.insert(in_rec)
+                except Exception as e:
+                    if DEBUG_IDX: print("[RTREE build secondary] skip:", e)
+
+    # ----------------------------------- DML insert ---------------------------------- #
+
+    def insert(self, params):
+        """Inserta una fila en el primario y actualiza secundarios (protegidos)."""
         mainfilename = self.indexes["primary"]["filename"]
 
-        if (maindex == "heap"):
-            InsFile = HeapFile(mainfilename)
-            records = InsFile.insert(record,additional)
-        elif (maindex == "sequential"):
-            InsFile = SeqFile(mainfilename)
-            records = InsFile.insert(record,additional)
-        elif (maindex == "isam"):
-            InsFile = IsamFile(mainfilename)
-            records = InsFile.insert(record,additional) 
-        elif (maindex == "b+"):
-            self.p_print("b+", record, additional, mainfilename) 
-            
+        # 1) Sanitizar tipos primero y luego marcar 'deleted'
+        record = self._coerce_types(params["record"])
+        record["deleted"] = False
+
+        # Uniques y clave del ISAM (si aplica)
+        additional = {"key": None, "unique": []}
+        for index in self.indexes:
+            if self.indexes[index]["filename"] == mainfilename and index != "primary":
+                additional["key"] = index
+                break
+        for field in self.relation:
+            if "key" in self.relation[field] and self.relation[field]["key"] in ("primary", "unique"):
+                additional["unique"].append(field)
+
+        # 2) Insertar en PRIMARIO
+        maindex = self.indexes["primary"]["index"]
+        if maindex == "heap":
+            records = HeapFile(mainfilename).insert(record, additional)              # → [(row_dict, pos), ...]
+        elif maindex == "sequential":
+            records = SeqFile(mainfilename).insert(record, additional)
+        elif maindex == "isam":
+            records = IsamFile(mainfilename).insert(record, additional)
+        elif maindex == "b+":
+            BPlusFile(mainfilename).insert(record, {"key": self.primary_key})
+            records = [record]                                                       # → [row_dict]
+        else:
+            records = []
+
+        # 3) Replicar en SECUNDARIOS (protegidos; si algo falla, no rompe el DML)
         if len(records) >= 1:
-
             for index in self.indexes:
-
-                if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
+                if index == "primary" or self.indexes[index]["filename"] == mainfilename:
                     continue
-                
+
                 filename = self.indexes[index]["filename"]
-                additional = {"key": index}
+                kind = self.indexes[index]["index"]
 
-                for record in records:
-
-                    new_record = {}
-
-                    if self.indexes["primary"]["index"] == "heap":
-                        new_record = {"pos": record[1], "deleted": False}
-                        new_record[index] = record[0][index]
-                    
-                    else:
-                        new_record = {"pk": record[self.primary_key], "deleted": False}
-                        new_record[index] = record[index]
-
-                    indx = self.indexes[index]["index"]
-
-                    if (indx == "hash"):
+                if kind == "hash":
+                    try:
                         h = ExtendibleHashingFile(filename)
                         if self.indexes["primary"]["index"] == "heap":
                             # records: [(row_dict, pos), ...]
@@ -195,42 +268,61 @@ class File:
                                     continue
                                 rec = {"pk": row_dict[self.primary_key], index: row_dict[index], "deleted": False}
                                 h.insert(rec, key_name=index)
-                        #self.p_print("hash", new_record,additional,filename)
-                    elif (indx == "b+"):
-                        self.p_print("b+", new_record,additional,filename)
-                    elif (indx == "rtree"):
-                        is_heap = (self.indexes["primary"]["index"] == "heap")
-                        idx_filename = self.indexes[index]["filename"]
-                        data_dir = os.path.dirname(os.path.dirname(idx_filename))
-                        rt = RTree(self.table, index, data_dir,
-                                   key=index, M=self.indexes[index].get("M", 32),
-                                   heap_file=self.indexes["primary"]["filename"] if is_heap else None)
+                    except Exception as e:
+                        if DEBUG_IDX: print("[HASH insert secondary] skip:", e)
 
+                elif kind == "b+":
+                    try:
+                        bp = BPlusFile(filename)
+                        if self.indexes["primary"]["index"] == "heap":
+                            for row_dict, pos in records:
+                                if index not in row_dict:
+                                    continue
+                                rec = {"pos": pos, index: row_dict[index], "deleted": False}
+                                bp.insert(rec, {"key": index})
+                        else:
+                            for row_dict in records:
+                                if index not in row_dict:
+                                    continue
+                                rec = {index: row_dict[index], "pk": row_dict[self.primary_key], "deleted": False}
+                                bp.insert(rec, {"key": index})
+                    except Exception as e:
+                        if DEBUG_IDX: print("[BPLUS insert secondary] skip:", e)
+
+                elif kind == "rtree":
+                    try:
+                        is_heap = (self.indexes["primary"]["index"] == "heap")
+                        rt = self._make_rtree(index, heap_ok=is_heap)
                         if is_heap:
                             # records: [(row_dict, pos), ...]
                             for row_dict, pos in records:
                                 if index not in row_dict:
                                     continue
-                                in_rec = {"pos": pos, index: row_dict[index], "deleted": False}
-                                val = in_rec.get("coords")
-                                if isinstance(in_rec.get("coords"), str) and in_rec["coords"].startswith("["):
-                                    import json
-                                    in_rec["coords"] = json.loads(in_rec["coords"])
+                                ok, pt = self._as_point(row_dict[index])
+                                if not ok:
+                                    continue
+                                in_rec = {"pos": pos, index: pt, "deleted": False}
                                 rt.insert(in_rec)
-
                         else:
                             # records: [row_dict, ...]
                             for row_dict in records:
                                 if index not in row_dict:
                                     continue
-                                in_rec = {"pos": row_dict[self.primary_key], index: row_dict[index], "deleted": False}
-                                val = in_rec.get("coords")
-                                if isinstance(in_rec.get("coords"), str) and in_rec["coords"].startswith("["):
-                                    import json
-                                    in_rec["coords"] = json.loads(in_rec["coords"])
+                                ok, pt = self._as_point(row_dict[index])
+                                if not ok:
+                                    continue
+                                in_rec = {"pos": row_dict[self.primary_key], index: pt, "deleted": False}
                                 rt.insert(in_rec)
+                    except Exception as e:
+                        if DEBUG_IDX: print("[RTREE insert secondary] skip:", e)
+
+        # Devolver 'records' para que el executor compute meta.affected
+        return records
+
+    # ----------------------------------- DML search ---------------------------------- #
 
     def search(self, params: dict):
+        """Búsqueda por igualdad. Si el campo es primario o no está indexado, usa el primario."""
         field = params["field"]
         value = params["value"]
         records = []
@@ -238,450 +330,447 @@ class File:
         additional = {"key": field, "value": value, "unique": False}
         mainfilename = self.indexes["primary"]["filename"]
         mainindx = self.indexes["primary"]["index"]
-        mainindex = False
-        same_key = True
+        mainindex = False     # ¿vamos por el índice primario?
+        same_key = True       # para SEQ/ISAM: si no coincide la clave, cambia estrategia
 
+        # ¿el campo es PK/UNIQUE?
         if "key" in self.relation[field]:
-            if (self.relation[field]["key"] == "primary"):
+            if self.relation[field]["key"] == "primary":
                 additional["unique"] = True
                 mainindex = True
-            
             else:
                 additional["unique"] = True
-        
+
+        # Si el campo NO está indexado secundariamente → caer al primario
         if field not in self.indexes:
             mainindex = True
             same_key = False
-        
+
         if mainindex:
-
-            if (mainindx == "heap"):
-                SearchFile = HeapFile(mainfilename)
-                records = SearchFile.search(additional)
-            elif (mainindx  == "sequential"):
-                SearchFile = SeqFile(mainfilename)
-                records = SearchFile.search(additional, same_key)
-            elif (mainindx == "isam"):
-                SearchFile = IsamFile(mainfilename)
-                records = SearchFile.search(additional, same_key)
-            elif (mainindx == "b+"):
-                self.p_print("b+", additional, mainfilename) 
-        
-        else:
-            
-            filename = self.indexes[field]["filename"]
-            indx = self.indexes[field]["index"]
-
-            if (indx  == "hash"):
-                h = ExtendibleHashingFile(filename)
-                hit = h.find(value, key_name=field)
-                records = []
-                if hit:
-                    if self.indexes["primary"]["index"] == "heap":
-                        # Para heap devolvemos posiciones (enteros)
-                        if "pos" in hit:
-                            records = [hit["pos"]]
+            # ----------- búsqueda en PRIMARIO -----------
+            if mainindx == "heap":
+                records = HeapFile(mainfilename).search(additional)
+            elif mainindx == "sequential":
+                records = SeqFile(mainfilename).search(additional, same_key)
+            elif mainindx == "isam":
+                records = IsamFile(mainfilename).search(additional, same_key)
+            elif mainindx == "b+":
+                try:
+                    bp = BPlusFile(mainfilename)
+                    if field == self.primary_key:
+                        hits = bp.search({"key": field, "value": value})
+                        records = [hits] if isinstance(hits, dict) else (hits or [])
                     else:
-                        # Para primarios no-heap devolvemos dict con PK
-                        records = [hit]
-                #self.p_print("hash", additional, filename)
-            elif (indx == "b+"):
-                self.p_print("b+", additional, filename)
-            elif (indx == "rtree"):
-                # Soportamos dos formas:
-                # 1) BETWEEN numérico (no aplica a rtree, se ignora aquí)
-                # 2) Rectángulo para rtree (cuando params trae point/r lo maneja otra op)
-                if "point" in params and "r" in params:
-                    # Esto lo tratamos en un op dedicado (rtree_within_circle)
+                        # Fallback: escaneo completo si el campo no es PK
+                        rows = self.execute({"op": "scan"}) or []
+                        records = [r for r in rows if isinstance(r, dict) and r.get(field) == value]
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS search primary] skip:", e)
                     records = []
-                else:
+        else:
+            # ----------- búsqueda por INDICE SECUNDARIO (protegida) -----------
+            filename = self.indexes[field]["filename"]
+            kind = self.indexes[field]["index"]
+
+            if kind == "hash":
+                try:
+                    h = ExtendibleHashingFile(filename)
+                    hit = h.find(value, key_name=field)
+                    records = []
+                    if hit:
+                        if self.indexes["primary"]["index"] == "heap":
+                            if "pos" in hit:
+                                records = [{"pos": hit["pos"]}]
+                        else:
+                            records = [hit]
+                except Exception as e:
+                    if DEBUG_IDX: print("[HASH search secondary] skip:", e)
+                    records = []
+
+            elif kind == "b+":
+                try:
+                    bp = BPlusFile(filename)
+                    hits = bp.search({"key": field, "value": value})
+                    records = []
+                    if self.indexes["primary"]["index"] == "heap":
+                        for h in (hits or []):
+                            if "pos" in h:
+                                records.append({"pos": h["pos"]})
+                    else:
+                        records = hits or []
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS search secondary] skip:", e)
+                    records = []
+
+            elif kind == "rtree":
+                try:
                     rect = params.get("rect") or {
                         "xmin": params["min"], "xmax": params["max"],
                         "ymin": params.get("ymin", params["min"]),
-                        "ymax": params.get("ymax", params["max"])
+                        "ymax": params.get("ymax", params["max"]),
                     }
                     is_heap = (self.indexes["primary"]["index"] == "heap")
                     rt = self._make_rtree(field, heap_ok=is_heap)
-                    records = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
-                    records = self._bridge_from_rtree(records)
+                    items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
+                    return self._bridge_from_rtree(items)
+                except Exception as e:
+                    if DEBUG_IDX: print("[RTREE search secondary] skip:", e)
+                    return []
 
+            # Si primario es HEAP y lo que tenemos son posiciones → resolver a filas
             if self.indexes["primary"]["index"] == "heap":
-                SearchFile = HeapFile(mainfilename)
-                return SearchFile.search_by_pos(records)
+                return HeapFile(mainfilename).search_by_pos(self._posify(records))
 
+            # Si primario NO es HEAP → resolver a filas por PK
             ret_records = []
-
-            for record in records:
+            for rec in records:
                 ret_records.extend(
-                    self.search({"op": "search", "field": self.primary_key, "value": record[self.primary_key]}))
-
+                    self.search({"op": "search", "field": self.primary_key, "value": rec["pk"]})
+                )
             records = ret_records
-        
+
         return records
-    
+
+    # ------------------------------- DML range_search ------------------------------- #
+
     def range_search(self, params: dict):
+        """Búsqueda por rango (min/max) similar a search, con ramas para secundarios."""
         field = params["field"]
         additional = {"key": field}
         mainfilename = self.indexes["primary"]["filename"]
         mainindx = self.indexes["primary"]["index"]
         mainindex = False
         same_key = True
-
         records = []
 
         if "key" in self.relation[field] and self.relation[field]["key"] == "primary":
-                mainindex = True
-        
+            mainindex = True
+
         if field not in self.indexes:
             mainindex = True
             same_key = False
-        
+
         if mainindex:
-
-            if (mainindx == "heap"):
-                additional["min"] = params["min"]
-                additional["max"] = params["max"]
-                RangeFile = HeapFile(mainfilename)
-                records = RangeFile.range_search(additional)
-            elif (mainindx  == "sequential"):
-                additional["min"] = params["min"]
-                additional["max"] = params["max"]
-                RangeFile = SeqFile(mainfilename)
-                records = RangeFile.range_search(additional, same_key)
-            elif (mainindx == "isam"):
-                additional["min"] = params["min"]
-                additional["max"] = params["max"]
-                RangeFile = IsamFile(mainfilename)
-                records = RangeFile.range_search(additional, same_key)
-            elif (mainindx == "b+"):
-                additional["min"] = params["min"]
-                additional["max"] = params["max"]
-                self.p_print("b+", additional, mainfilename)
-        
+            # ----------- rango en PRIMARIO -----------
+            if mainindx == "heap":
+                additional["min"] = params["min"]; additional["max"] = params["max"]
+                records = HeapFile(mainfilename).range_search(additional)
+            elif mainindx == "sequential":
+                additional["min"] = params["min"]; additional["max"] = params["max"]
+                records = SeqFile(mainfilename).range_search(additional, same_key)
+            elif mainindx == "isam":
+                additional["min"] = params["min"]; additional["max"] = params["max"]
+                records = IsamFile(mainfilename).range_search(additional, same_key)
+            elif mainindx == "b+":
+                try:
+                    bp = BPlusFile(mainfilename)
+                    if field == self.primary_key:
+                        records = bp.range_search({"key": field, "min": params["min"], "max": params["max"]})
+                    else:
+                        # Fallback por escaneo si no es PK
+                        lo, hi = params["min"], params["max"]
+                        rows = self.execute({"op": "scan"}) or []
+                        def in_range(v): return v is not None and lo <= v <= hi
+                        records = [r for r in rows if isinstance(r, dict) and in_range(r.get(field))]
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS range_search primary] skip:", e)
+                    records = []
         else:
-            
+            # ----------- rango por SECUNDARIO (protegido) -----------
             filename = self.indexes[field]["filename"]
-            indx = self.indexes[field]["index"]
+            kind = self.indexes[field]["index"]
 
-            if (indx == "b+"):
-                additional["min"] = params["min"]
-                additional["max"] = params["max"]
-                self.p_print("b+", additional, filename)
-            elif (indx == "rtree"):
-                # params puede traer rect ya armado; si no, lo armamos con min/max
-                rect = params.get("rect") or {
-                    "xmin": params["min"], "xmax": params["max"],
-                    "ymin": params.get("ymin", params["min"]),
-                    "ymax": params.get("ymax", params["max"]),
-                }
-                is_heap = (self.indexes["primary"]["index"] == "heap")
-                idx_filename = self.indexes[field]["filename"]
-                data_dir = os.path.dirname(os.path.dirname(idx_filename))
-                rt = RTree(self.table, field, data_dir,
-                           key=field, M=self.indexes[field].get("M", 32),
-                           heap_file=self.indexes["primary"]["filename"] if is_heap else None)
+            if kind == "b+":
+                try:
+                    bp = BPlusFile(filename)
+                    hits = bp.range_search({"key": field, "min": params["min"], "max": params["max"]})
+                    if self.indexes["primary"]["index"] == "heap":
+                        # Resolver posiciones a filas
+                        return HeapFile(mainfilename).search_by_pos(
+                            self._posify([h["pos"] for h in (hits or []) if isinstance(h, dict) and "pos" in h])
+                        )
+                    else:
+                        records = hits or []
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS range_search secondary] skip:", e)
+                    records = []
 
-                items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
+            elif kind == "rtree":
+                try:
+                    # Si no viene rect armado, construirlo desde min/max simples
+                    rect = params.get("rect") or {
+                        "xmin": params["min"], "xmax": params["max"],
+                        "ymin": params.get("ymin", params["min"]),
+                        "ymax": params.get("ymax", params["max"]),
+                    }
+                    is_heap = (self.indexes["primary"]["index"] == "heap")
+                    rt = self._make_rtree(field, heap_ok=is_heap)
+                    items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
+                    return self._bridge_from_rtree(items)
+                except Exception as e:
+                    if DEBUG_IDX: print("[RTREE range_search secondary] skip:", e)
+                    return []
 
-                if is_heap:
-                    return items  # ya son filas desde heap
-                else:
-                    # bridge PK -> filas
-                    out = []
-                    for it in (items or []):
-                        pk = (it or {}).get("pos")
-                        if pk is None:
-                            continue
-                        out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
-                    return out
-
+            # Resolver a filas igual que en search()
             if self.indexes["primary"]["index"] == "heap":
-                SearchFile = HeapFile(mainfilename)
-                return SearchFile.search_by_pos(records)
-            
+                return HeapFile(mainfilename).search_by_pos(self._posify(records))
             ret_records = []
-
-            for record in records:
+            for rec in records:
                 ret_records.extend(
-                    self.search({"op": "search", "field": self.primary_key, "value": record[self.primary_key]}))
-
+                    self.search({"op": "search", "field": self.primary_key, "value": rec["pk"]})
+                )
             records = ret_records
-        
+
         return records
 
+    # ----------------------------------- DML knn ------------------------------------ #
+
     def knn(self, params: dict):
+        """k-NN sobre un índice R-Tree secundario. Siempre protegido."""
         field = params["field"]
         if field not in self.indexes:
             return []
         if "key" in self.relation.get(field, {}) and self.relation[field]["key"] == "primary":
             return []
-
         if self.indexes[field]["index"] != "rtree":
             return []
+        try:
+            is_heap = (self.indexes["primary"]["index"] == "heap")
+            rt = self._make_rtree(field, heap_ok=is_heap)
+            items = rt.knn(params["point"][0], params["point"][1], params["k"])
+            return self._bridge_from_rtree(items)
+        except Exception as e:
+            if DEBUG_IDX: print("[RTREE knn] skip:", e)
+            return []
 
-        is_heap = (self.indexes["primary"]["index"] == "heap")
-        idx_filename = self.indexes[field]["filename"]
-        data_dir = os.path.dirname(os.path.dirname(idx_filename))
-        rt = RTree(self.table, field, data_dir,
-                   key=field, M=self.indexes[field].get("M", 32),
-                   heap_file=self.indexes["primary"]["filename"] if is_heap else None)
-
-        items = rt.knn(params["point"][0], params["point"][1], params["k"])
-
-        if is_heap:
-            return items
-        else:
-            out = []
-            for it in (items or []):
-                pk = (it or {}).get("pos")
-                if pk is None:
-                    continue
-                out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
-            return out
+    # ----------------------------------- DML remove --------------------------------- #
 
     def remove(self, params):
+        """Elimina por condición y limpia secundarios (todo protegido)."""
         field = params["field"]
         value = params["value"]
 
         additional = {"key": field, "value": value, "unique": False}
         mainfilename = self.indexes["primary"]["filename"]
         mainindx = self.indexes["primary"]["index"]
-        same_key = True
         mainindex = False
-        search_index = ""
+        same_key = True
         records = []
 
-        if "key" in self.relation[field]:
-            if (self.relation[field]["key"] == "primary"):
+        # ¿La condición es sobre la PK? → vamos al primario.
+        if "key" in self.relation.get(field, {}):
+            if self.relation[field]["key"] == "primary":
                 additional["unique"] = True
                 mainindex = True
-            
             else:
                 additional["unique"] = True
-        
+
         if field not in self.indexes:
-            same_key = False
             mainindex = True
-        
-        records = []
-        
+            same_key = False
+
+        # 1) Borrado en PRIMARIO o selección de víctimas por SECUNDARIO
         if mainindex:
-
-            if (mainindx == "heap"):
-                DeleteFile = HeapFile(mainfilename)
-                records = DeleteFile.remove(additional)
-            elif (mainindx  == "sequential"):
-                DeleteFile = SeqFile(mainfilename)
-                records = DeleteFile.remove(additional, same_key)
-            elif (mainindx == "isam"):
-                DeleteFile = IsamFile(mainfilename)
-                records = DeleteFile.remove(additional, same_key)
-            elif (mainindx == "b+"):
-                self.p_print("b+", additional, mainfilename)
-        
+            if mainindx == "heap":
+                records = HeapFile(mainfilename).remove(additional)
+            elif mainindx == "sequential":
+                records = SeqFile(mainfilename).remove(additional, same_key)
+            elif mainindx == "isam":
+                records = IsamFile(mainfilename).remove(additional, same_key)
+            elif mainindx == "b+":
+                try:
+                    bp = BPlusFile(mainfilename)
+                    if field == self.primary_key:
+                        bp.remove({"key": self.primary_key, "value": value})
+                        records = [{self.primary_key: value}]
+                    else:
+                        victims = [r for r in (self.execute({"op": "scan"}) or []) if isinstance(r, dict) and r.get(field) == value]
+                        for v in victims:
+                            try:
+                                bp.remove({"key": self.primary_key, "value": v[self.primary_key]})
+                            except Exception:
+                                pass
+                        records = victims
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS remove primary] skip:", e)
+                    records = []
         else:
-
+            # Buscar víctimas por SECUNDARIO (protegido)
             search_index = self.indexes[field]["index"]
             filename = self.indexes[field]["filename"]
-
-            if (search_index == "hash"):
-                h = ExtendibleHashingFile(filename)
-                hit = h.find(value, key_name=field)
-                records = []
-                if hit:
-                    if self.indexes["primary"]["index"] == "heap":
-                        # devolver posiciones para borrar directo en heap
-                        if "pos" in hit:
+            try:
+                if search_index == "hash":
+                    h = ExtendibleHashingFile(filename)
+                    hit = h.find(value, key_name=field)
+                    if hit:
+                        if mainindx == "heap" and "pos" in hit:
                             records = [hit["pos"]]
+                        else:
+                            records = [hit]
+                elif search_index == "b+":
+                    bp = BPlusFile(filename)
+                    hits = bp.search({"key": field, "value": value}) or []
+                    if mainindx == "heap":
+                        records = [h["pos"] for h in hits if isinstance(h, dict) and "pos" in h]
                     else:
-                        # devolver dict con PK para borrar en primarios no-heap
-                        records = [hit]
+                        records = hits
+                elif search_index == "rtree":
+                    is_heap = (mainindx == "heap")
+                    rt = self._make_rtree(field, heap_ok=is_heap)
+                    items = []
+                    if isinstance(value, (list, tuple)) and len(value) >= 2:
+                        x, y = float(value[0]), float(value[1]); eps = 1e-9
+                        items = rt.search_rect(x-eps, x+eps, y-eps, y+eps)
+                    elif isinstance(value, dict) and {"xmin","xmax","ymin","ymax"} <= set(value.keys()):
+                        items = rt.search_rect(value["xmin"], value["xmax"], value["ymin"], value["ymax"])
+                    records = self._bridge_from_rtree(items)
+            except Exception as e:
+                if DEBUG_IDX: print("[SECONDARY pre-remove] skip:", e)
+                records = []
 
-            elif (search_index == "b+"):
-                # (sigue pendiente implementar b+, por ahora solo log)
-                self.p_print("b+", additional, filename)
-
-            elif (search_index == "rtree"):
-                is_heap = (self.indexes["primary"]["index"] == "heap")
-                rt = self._make_rtree(field, heap_ok=is_heap)
-                items = []
-                # igualdad por punto: value = [x, y] o (x, y)
-                if isinstance(value, (list, tuple)) and len(value) >= 2:
-                    x, y = float(value[0]), float(value[1])
-                    eps = 1e-9
-                    items = rt.search_rect(x - eps, x + eps, y - eps, y + eps)
-                # o rect explícito: value = {"xmin","xmax","ymin","ymax"}
-                elif isinstance(value, dict) and {"xmin", "xmax", "ymin", "ymax"} <= set(value.keys()):
-                    items = rt.search_rect(value["xmin"], value["xmax"], value["ymin"], value["ymax"])
-                # bridge a filas o a PKs según primario
-                records = items if is_heap else self._bridge_from_rtree(items)
-
+            # Aplicar eliminación en PRIMARIO con las víctimas halladas
             if mainindx == "heap":
-
-                DeleteFile = HeapFile(mainfilename)
-                records = DeleteFile.delete_by_pos(records)
-            
+                return HeapFile(mainfilename).delete_by_pos(self._posify(records))
             else:
-
                 temp_records = []
-
-                for record in records:
-
-                    additional = {"key": self.primary_key, "value": record["pk"], "unique": True}
-                    same_key = True
-
-                    if (mainindx  == "sequential"):
-                        DeleteFile = SeqFile(mainfilename)
-                        temp_records.extend(DeleteFile.remove(additional, same_key))
-                    elif (mainindx == "isam"):
-                        DeleteFile = IsamFile(mainfilename)
-                        temp_records.extend(DeleteFile.remove(additional, same_key))
-                    elif (mainindx == "b+"):
-                        self.p_print("b+", additional, mainfilename)
-
+                if mainindx == "b+":
+                    try:
+                        bp = BPlusFile(mainfilename)
+                        for rec in (records or []):
+                            pk = rec.get("pk") if isinstance(rec, dict) else None
+                            if pk is None:
+                                continue
+                            try:
+                                bp.remove({"key": self.primary_key, "value": pk})
+                                temp_records.append(rec)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        if DEBUG_IDX: print("[BPLUS remove primary apply] skip:", e)
+                else:
+                    for rec in (records or []):
+                        pk = rec.get("pk") if isinstance(rec, dict) else None
+                        if pk is None:
+                            continue
+                        add = {"key": self.primary_key, "value": pk, "unique": True}
+                        if mainindx == "sequential":
+                            temp_records.extend(SeqFile(mainfilename).remove(add, True))
+                        elif mainindx == "isam":
+                            temp_records.extend(IsamFile(mainfilename).remove(add, True))
                 records = temp_records
 
-
+        # 2) Limpiar SECUNDARIOS (protegido; cualquier error se ignora)
         for index in self.indexes:
-
-            if index == "primary" or self.indexes[index]["filename"]  == mainfilename:
-                    continue
-            
-            filename = self.indexes[index]["filename"]
-            indx = self.indexes[index]["index"]
-
-            if indx == search_index:
+            if index == "primary" or self.indexes[index]["filename"] == mainfilename:
                 continue
+            kind = self.indexes[index]["index"]
+            filename = self.indexes[index]["filename"]
 
-            for record in records:
-
-                additional = {"key": index, "value": record[index], "unique": True}
-
-                if "key" in self.relation[index]:
-                    if (self.relation[index]["key"] == "primary") or self.relation[index]["key"] == "unique":
-                        additional["unique"] = True
-                
-                if (indx  == "hash"):
+            if kind == "hash":
+                try:
                     h = ExtendibleHashingFile(filename)
-                    for rec in records:
-                        # rec puede ser (row_dict, pos) o dict
-                        if isinstance(rec, tuple) and len(rec) >= 2:
-                            row_dict = rec[0]
-                            if index in row_dict:
-                                try:
-                                    h.remove(row_dict[index], key_name=index)
-                                except:
-                                    pass
-                        elif isinstance(rec, dict):
-                            if index in rec:
-                                try:
-                                    h.remove(rec[index], key_name=index)
-                                except:
-                                    pass
-                    #self.p_print("hash",additional,filename)
-                elif (indx == "b+"):
-                    self.p_print("b+", additional,filename)
-                elif (indx == "rtree"):
-                    is_heap = (self.indexes["primary"]["index"] == "heap")
-                    idx_filename = self.indexes[index]["filename"]
-                    data_dir = os.path.dirname(os.path.dirname(idx_filename))
-                    rt = RTree(self.table, index, data_dir,
-                               key=index, M=self.indexes[index].get("M", 32),
-                               heap_file=self.indexes["primary"]["filename"] if is_heap else None)
+                    for rec in (records or []):
+                        if isinstance(rec, tuple) and len(rec) >= 2:  # (row, pos)
+                            row = rec[0]
+                            if index in row:
+                                try: h.remove(row[index], key_name=index)
+                                except Exception: pass
+                        elif isinstance(rec, dict) and index in rec:   # dict
+                            try: h.remove(rec[index], key_name=index)
+                            except Exception: pass
+                except Exception as e:
+                    if DEBUG_IDX: print("[HASH remove secondary] skip:", e)
 
-                    for rec in records:
-                        # Si viene como (row, pos)
+            elif kind == "b+":
+                try:
+                    bp = BPlusFile(filename)
+                    for rec in (records or []):
+                        if isinstance(rec, tuple) and len(rec) >= 2:
+                            row = rec[0]
+                            if index in row:
+                                try: bp.remove({"key": index, "value": row[index]})
+                                except Exception: pass
+                        elif isinstance(rec, dict) and index in rec:
+                            try: bp.remove({"key": index, "value": rec[index]})
+                            except Exception: pass
+                except Exception as e:
+                    if DEBUG_IDX: print("[BPLUS remove secondary] skip:", e)
+
+            elif kind == "rtree":
+                try:
+                    is_heap = (mainindx == "heap")
+                    rt = self._make_rtree(index, heap_ok=is_heap)
+                    for rec in (records or []):
                         if isinstance(rec, tuple) and len(rec) >= 2:
                             row, pos = rec[0], rec[1]
-                            rm = {"pos": pos}
-                            if index in row: rm[index] = row[index]
-                            try:
-                                rt.remove(rm)
-                            except:
-                                pass
-                        # Si viene como dict (con PK)
+                            ok, pt = self._as_point(row.get(index))
+                            if not ok: continue
+                            try: rt.remove({"pos": pos, index: pt})
+                            except Exception: pass
                         elif isinstance(rec, dict):
-                            rm = {}
-                            if "pos" in rec:
-                                rm["pos"] = rec["pos"]
-                            elif self.primary_key in rec:
-                                rm["pos"] = rec[self.primary_key]
-                            if index in rec: rm[index] = rec[index]
-                            if "pos" in rm:
-                                try:
-                                    rt.remove(rm)
-                                except:
-                                    pass
+                            pos = rec.get("pos", rec.get(self.primary_key))
+                            ok, pt = self._as_point(rec.get(index))
+                            if pos is None or not ok: continue
+                            try: rt.remove({"pos": pos, index: pt})
+                            except Exception: pass
+                except Exception as e:
+                    if DEBUG_IDX: print("[RTREE remove secondary] skip:", e)
+
+        # Devolver lista de afectados (para meta.affected)
+        return records
+
+    # ----------------------------------- execute ------------------------------------ #
 
     def execute(self, params: dict):
-
+        """Multiplexor de operaciones."""
         if params["op"] == "build":
             return self.build(params)
 
         elif params["op"] == "insert":
             return self.insert(params)
-        
+
         elif params["op"] == "search":
             return self.search(params)
-        
-        elif params["op"] == "range search":
+
+        elif params["op"] in ("range search", "range_search"):
             return self.range_search(params)
-        
+
         elif params["op"] == "knn":
-            self.knn(params)
-        
+            return self.knn(params)
+
         elif params["op"] == "remove":
-            self.remove(params)
+            return self.remove(params)
 
         elif params["op"] == "rtree_within_circle":
-            field = params["field"]
-            cx, cy = float(params["center"]["x"]), float(params["center"]["y"])
-            rr = float(params["radius"])
-
-            is_heap = (self.indexes["primary"]["index"] == "heap")
-            idx_filename = self.indexes[field]["filename"]
-            data_dir = os.path.dirname(os.path.dirname(idx_filename))
-
-            rt = RTree(self.table, field, data_dir,
-                       key=field, M=self.indexes[field].get("M", 32),
-                       heap_file=self.indexes["primary"]["filename"] if is_heap else None)
-
-            items = rt.range(cx, cy, rr)
-            if is_heap:
-                return items
-
-            out = []
-            for it in (items or []):
-                pk = (it or {}).get("pos")
-                if pk is None: continue
-                out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
-            return out
+            # Op espacial (si falla, devolvemos vacío)
+            try:
+                field = params["field"]
+                cx, cy = float(params["center"]["x"]), float(params["center"]["y"])
+                rr = float(params["radius"])
+                is_heap = (self.indexes["primary"]["index"] == "heap")
+                rt = self._make_rtree(field, heap_ok=is_heap)
+                items = rt.range(cx, cy, rr)
+                return self._bridge_from_rtree(items)
+            except Exception as e:
+                if DEBUG_IDX: print("[RTREE within_circle] skip:", e)
+                return []
 
         elif params["op"] == "rtree_range":
-            field = params["field"]
-            rect = params["rect"]
-            is_heap = (self.indexes["primary"]["index"] == "heap")
-            idx_filename = self.indexes[field]["filename"]
-            data_dir = os.path.dirname(os.path.dirname(idx_filename))
-
-            rt = RTree(self.table, field, data_dir,
-                       key=field, M=self.indexes[field].get("M", 32),
-                       heap_file=self.indexes["primary"]["filename"] if is_heap else None)
-
-            items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
-            if is_heap:
-                return items
-
-            out = []
-            for it in (items or []):
-                pk = (it or {}).get("pos")
-                if pk is None: continue
-                out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
-            return out
+            # Op espacial rectangular (si falla, devolvemos vacío)
+            try:
+                field = params["field"]
+                rect = params["rect"]
+                is_heap = (self.indexes["primary"]["index"] == "heap")
+                rt = self._make_rtree(field, heap_ok=is_heap)
+                items = rt.search_rect(rect["xmin"], rect["xmax"], rect["ymin"], rect["ymax"])
+                return self._bridge_from_rtree(items)
+            except Exception as e:
+                if DEBUG_IDX: print("[RTREE range op] skip:", e)
+                return []
 
         elif params["op"] == "import_csv":
+            # Importación desde CSV (simple casting + insert por fila)
             import csv, json as _json
-            prim = self.indexes.get("primary", {})
             path = params["path"]
             inserted = 0
             with open(path, newline="", encoding="utf-8") as f:
@@ -714,10 +803,15 @@ class File:
             return {"count": inserted}
 
         elif params["op"] == "scan":
-            # Lee todas las filas (cualquier primario) usando el header del archivo
-            import json as _json, struct
-            from backend.core.utils import build_format
-            from backend.core.record import Record
+            # Lectura completa del archivo (cualquier primario) usando header binario
+            main_kind = self.indexes["primary"]["index"]
+            if main_kind == "b+":
+                # Para B+ podemos hacer un range completo por la PK
+                bp = BPlusFile(self.indexes["primary"]["filename"])
+                pk = self.primary_key
+                t = (self.relation.get(pk, {}).get("type") or "").lower()
+                lo, hi = (float("-inf"), float("inf")) if t in ("int", "i", "float", "real", "double", "f") else ("", "\uffff")
+                return bp.range_search({"key": pk, "min": lo, "max": hi})
 
             mainfilename = self.indexes["primary"]["filename"]
             records = []
@@ -727,8 +821,8 @@ class File:
                 schema = _json.loads(f.read(slen).decode("utf-8"))
                 fmt = build_format(schema)
                 rec_size = struct.calcsize(fmt)
-                end = f.seek(0, 2)         # EOF
-                f.seek(4 + slen)           # inicio de datos
+                end = f.seek(0, 2)  # EOF
+                f.seek(4 + slen)   # inicio de datos
 
                 while f.tell() < end:
                     chunk = f.read(rec_size)
@@ -739,7 +833,3 @@ class File:
                         continue
                     records.append(rec)
             return records
-
-
-
-

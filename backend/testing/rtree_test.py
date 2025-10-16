@@ -64,7 +64,7 @@ def expect_ids(env: dict, expected_ids: set):
     print("  ✓ Geo results OK:", sorted(got))
 
 def main():
-    tbl = "lugares_sql"
+    tbl = "rtree_lugares_sql"
     csv_path = os.path.join(HERE, "_testdata", "csv", "places.csv")
     ensure_csv(csv_path)
 

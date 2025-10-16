@@ -112,6 +112,21 @@ def _find_pk_name(relation: Dict[str, Dict]) -> Optional[str]:
     # fallback: primera columna si no hay key registrada
     return next(iter(relation.keys()), None)
 
+def drop_table(table: str):
+    """
+    Elimina la carpeta DATA_DIR/<table>, borra archivos y saca la entrada de tables.dat.
+    """
+    # borra carpeta física
+    tdir = DATA_DIR / table
+    if tdir.exists():
+        shutil.rmtree(tdir, ignore_errors=True)
+
+    # quitar del catálogo global
+    tables = load_tables()
+    if table in tables:
+        del tables[table]
+        save_tables(tables)
+
 def create_index(table: str, column: str, method: str):
     """
     Crea un índice secundario en DATA_DIR/<table>/<table>-<method>-<column>.dat
@@ -151,7 +166,7 @@ def create_index(table: str, column: str, method: str):
 def drop_index(table: Optional[str], column_or_name: Optional[str]):
     """
     Elimina un índice secundario del metadato y borra su archivo.
-    Ignora si el índice no existe. No elimina 'primary'.
+    Ignora si el índice no existe. No elimina 'indexes'.
     """
     if not table or not column_or_name:
         return
@@ -172,18 +187,3 @@ def drop_index(table: Optional[str], column_or_name: Optional[str]):
     # quitar del metadato
     del indexes[col]
     put_json(str(meta), [relation, indexes])
-
-def drop_table(table: str):
-    """
-    Elimina la carpeta DATA_DIR/<table>, borra archivos y saca la entrada de tables.dat.
-    """
-    # borra carpeta física
-    tdir = DATA_DIR / table
-    if tdir.exists():
-        shutil.rmtree(tdir, ignore_errors=True)
-
-    # quitar del catálogo global
-    tables = load_tables()
-    if table in tables:
-        del tables[table]
-        save_tables(tables)

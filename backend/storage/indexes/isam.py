@@ -147,6 +147,9 @@ class IsamFile:
         self.index_filename = self.filename.replace(".dat", "_index.dat")
         self.create_files()
 
+        self.read_count=0
+        self.write_count=0
+
     def get_metrics(self, additional):
         """
         Construye el formato de struct para entradas del índice: [key][page_ptr]
@@ -228,12 +231,14 @@ class IsamFile:
 
             mainfile.seek(0)
             schema_size = struct.unpack("I", mainfile.read(4))[0]
+            self.read_count+=1
 
             mainfile.seek(4 + schema_size)
 
             i = 1
             while (end != mainfile.tell()):
                 page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
                 for temp_record in page.records:
 
@@ -251,8 +256,10 @@ class IsamFile:
 
         mainfile.seek(0)
         schema_size = struct.unpack("I", mainfile.read(4))[0]
+        self.read_count+=1
 
         page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+        self.read_count+=1
 
         if len(page.records) < PAGE_FACTOR:
 
@@ -263,6 +270,7 @@ class IsamFile:
             page.records.sort(key=lambda x: x.fields[additional["key"]])
             mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
             mainfile.write(page.pack(self.REC_SIZE))
+            self.write_count+=1
 
         else:
 
@@ -280,10 +288,12 @@ class IsamFile:
                 page.records = right_records
                 mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                 mainfile.write(page.pack(self.REC_SIZE))
+                self.write_count+=1
 
                 new_page = DataPage(left_records)
                 mainfile.seek(0, 2)
                 mainfile.write(new_page.pack(self.REC_SIZE))
+                self.write_count+=1
 
                 new_key = left_records[-1].fields[additional["key"]]
                 new_index = Index(new_key, DataPage.getTotalPages(mainfile, data_page_size, schema_size))
@@ -294,6 +304,8 @@ class IsamFile:
                 indexfile.seek((leaf_number - 1) * index_page_size)
                 indexfile.write(leaf.pack(indexformat, indexsize))
 
+                self.write_count+=1
+
                 if (len(leaf.indexes) > INDEX_FACTOR):
                     middle = len(leaf.indexes) // 2
                     left_indexes = leaf.indexes[:middle]
@@ -302,11 +314,13 @@ class IsamFile:
                     leaf.indexes = right_indexes
                     indexfile.seek((leaf_number - 1) * index_page_size)
                     indexfile.write(leaf.pack(indexformat, indexsize))
+                    self.write_count+=1
 
                     new_index_page = IndexPage(left_indexes)
                     indexfile.seek(0, 2)
                     new_page_number = IndexPage.getTotalPages(indexfile, index_page_size) + 1
                     indexfile.write(new_index_page.pack(indexformat, indexsize))
+                    self.write_count+=1
 
                     new_key = left_indexes[-1].key
                     new_index = Index(new_key, new_page_number)
@@ -316,6 +330,7 @@ class IsamFile:
 
                     indexfile.seek(0)
                     indexfile.write(root.pack(indexformat, indexsize))
+                    self.write_count+=1
 
             else:
 
@@ -334,11 +349,13 @@ class IsamFile:
 
                         mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                         mainfile.write(page.pack(self.REC_SIZE))
+                        self.write_count+=1
 
                         if (page.next_page != -1):
                             page_number = page.next_page
                             page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema,
                                                     schema_size)
+                            self.read_count+=1
 
                         else:
 
@@ -347,15 +364,18 @@ class IsamFile:
 
                             mainfile.seek(0, 2)
                             mainfile.write(new_page.pack(self.REC_SIZE))
+                            self.write_count+=1
 
                             mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                             mainfile.write(page.pack(self.REC_SIZE))
+                            self.write_count+=1
 
                             break
 
                     else:
                         mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                         mainfile.write(page.pack(self.REC_SIZE))
+                        self.write_count+=1
                         break
 
         return [record]
@@ -372,6 +392,7 @@ class IsamFile:
         with open(self.index_filename, "r+b") as indexfile:
 
             root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+            self.read_count+=1
 
             leaf_page = 0
 
@@ -386,8 +407,10 @@ class IsamFile:
                 root.indexes[len(root.indexes) - 1].key = record[additional["key"]]
                 indexfile.seek(0)
                 indexfile.write(root.pack(indexformat, indexsize))
+                self.write_count+=1
 
             leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+            self.read_count+=1
 
             data_page = 0
 
@@ -400,6 +423,7 @@ class IsamFile:
                 leaf.indexes[len(leaf.indexes) - 1].key = record[additional["key"]]
                 indexfile.seek((leaf_page - 1) * index_page_size)
                 indexfile.write(leaf.pack(indexformat, indexsize))
+                self.write_count+=1
 
             with open(self.filename, "r+b") as mainfile:
                 return self.insert_on_page(record, additional, mainfile, indexfile, leaf, root, leaf_page, data_page,
@@ -429,8 +453,11 @@ class IsamFile:
             indexfile.write(left_index.pack(indexformat, indexsize))
             indexfile.write(right_index.pack(indexformat, indexsize))
 
+            self.write_count+=3
+
         with open(self.filename, "r+b") as datafile:
             schema_size = struct.unpack("I", datafile.read(4))[0]
+            self.read_count+=1
 
             datafile.seek(4 + schema_size)
 
@@ -438,6 +465,8 @@ class IsamFile:
 
             datafile.write(Page.pack(self.REC_SIZE))
             datafile.write(Page.pack(self.REC_SIZE))
+
+            self.write_count+=2
 
         ret_records = []
 
@@ -449,7 +478,10 @@ class IsamFile:
     def search_on_page(self, additional, mainfile, page_number):
         mainfile.seek(0)
         schema_size = struct.unpack("I", mainfile.read(4))[0]
+        self.read_count+=1
+
         page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+        self.read_count+=1
 
         records = []
 
@@ -472,6 +504,7 @@ class IsamFile:
 
             if (page.next_page != -1):
                 page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
             else:
                 break
@@ -484,6 +517,7 @@ class IsamFile:
         with open(self.index_filename, "r+b") as indexfile:
 
             root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+            self.read_count+=1
 
             leaf_page = 0
 
@@ -497,6 +531,7 @@ class IsamFile:
                 return []
 
             leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+            self.read_count+=1
 
             data_page = 0
 
@@ -519,6 +554,7 @@ class IsamFile:
 
             mainfile.seek(0)
             schema_size = struct.unpack("I", mainfile.read(4))[0]
+            self.read_count+=1
 
             mainfile.seek(4 + schema_size)
 
@@ -527,6 +563,7 @@ class IsamFile:
             i = 1
             while (end != mainfile.tell()):
                 page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
                 for record in page.records:
 
@@ -550,8 +587,10 @@ class IsamFile:
     def search_on_page_range(self, additional, mainfile, page_number):
         mainfile.seek(0)
         schema_size = struct.unpack("I", mainfile.read(4))[0]
+        self.read_count+=1
 
         page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+        self.read_count+=1
 
         records = []
 
@@ -571,6 +610,7 @@ class IsamFile:
 
             if (page.next_page != -1):
                 page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
             else:
                 break
@@ -588,6 +628,7 @@ class IsamFile:
             with open(self.filename, "r+b") as mainfile:
 
                 root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+                self.read_count+=1
 
                 for i in range(len(root.indexes)):
 
@@ -596,6 +637,7 @@ class IsamFile:
                         leaf_page = root.indexes[i].page
 
                         leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+                        self.read_count+=1
 
                         for j in range(len(leaf.indexes)):
 
@@ -620,6 +662,7 @@ class IsamFile:
 
             mainfile.seek(0)
             schema_size = struct.unpack("I", mainfile.read(4))[0]
+            self.read_count+=1
 
             mainfile.seek(4 + schema_size)
 
@@ -628,6 +671,7 @@ class IsamFile:
             i = 1
             while (end != mainfile.tell()):
                 page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
                 for record in page.records:
 
@@ -655,13 +699,16 @@ class IsamFile:
             if (page.next_page == -1):
                 mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                 mainfile.write(page.pack(self.REC_SIZE))
+                self.write_count+=1
                 break
 
             next_page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+            self.read_count+=1
 
             if len(next_page.records) == 0:
                 mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
                 mainfile.write(page.pack(self.REC_SIZE))
+                self.write_count+=1
                 break
 
             if next_page.records[0].fields[additional["key"]] == additional["value"]:
@@ -673,6 +720,7 @@ class IsamFile:
 
             mainfile.seek(4 + schema_size + (page_number - 1) * data_page_size)
             mainfile.write(page.pack(self.REC_SIZE))
+            self.write_count+=1
 
             page_number = page.next_page
             page = next_page
@@ -689,6 +737,7 @@ class IsamFile:
 
             mainfile.seek(0)
             schema_size = struct.unpack("I", mainfile.read(4))[0]
+            self.read_count+=1
 
             mainfile.seek(4 + schema_size)
 
@@ -699,6 +748,7 @@ class IsamFile:
                 repeat = False
 
                 page = DataPage.getPage(mainfile, i, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
 
                 for j in range(len(page.records)):
 
@@ -723,6 +773,7 @@ class IsamFile:
         with open(self.index_filename, "r+b") as indexfile:
 
             root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
+            self.read_count+=1
 
             leaf_page = 0
 
@@ -736,6 +787,7 @@ class IsamFile:
                 return records
 
             leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
+            self.read_count+=1
 
             data_page = 0
 
@@ -753,6 +805,8 @@ class IsamFile:
                 schema_size = struct.unpack("I", mainfile.read(4))[0]
 
                 page = DataPage.getPage(mainfile, data_page, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
+
                 page_number = data_page
 
                 while True:
@@ -779,6 +833,7 @@ class IsamFile:
 
                     page_number = page.next_page
                     page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+                    self.read_count+=1
 
         return records
 

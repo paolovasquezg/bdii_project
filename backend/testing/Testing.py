@@ -7,7 +7,7 @@ def HeapTest():
     print("\n=== Testing Heap (No Index) ===")
     table = "heap_products"
     fields = [
-        {"name": "product_id", "type": "i", "key": "primary"},
+        {"name": "product_id", "type": "i", "key": "indexes"},
         {"name": "name", "type": "s", "length": 32},
         {"name": "price", "type": "f"},
         {"name": "stock", "type": "i"}
@@ -58,7 +58,7 @@ def SeqTest():
 
     table2 = "products"
     fields2 = [
-        {"name": "product_id", "type": "i", "key": "primary", "index": "sequential"},
+        {"name": "product_id", "type": "i", "key": "indexes", "index": "sequential"},
         {"name": "name", "type": "s", "length": 32},
         {"name": "price", "type": "f"},
         {"name": "stock", "type": "i"}
@@ -113,7 +113,7 @@ def SeqTest():
     result = file.execute(range_id_params)
     print("Range search result for product_id 3-10 BEFORE delete:", result, "\n")
 
-    # Test delete using non-primary key field (name)
+    # Test delete using non-indexes key field (name)
     print("Testing delete by name...")
     delete_params = {
         "op": "remove",
@@ -126,7 +126,7 @@ def SeqTest():
     result = file.execute(range_id_params)
     print("Range search result for product_id 3-10 AFTER delete by name:", result, "\n")
 
-    # Test search by name (non-primary key)
+    # Test search by name (non-indexes key)
     search_by_name = {
         "op": "search",
         "field": "name",
@@ -135,7 +135,7 @@ def SeqTest():
     result = file.execute(search_by_name)
     print("Search result for name 'Component':", result)
 
-    # Test search by price (non-primary key)
+    # Test search by price (non-indexes key)
     search_by_price = {
         "op": "search",
         "field": "price",
@@ -144,7 +144,7 @@ def SeqTest():
     result = file.execute(search_by_price)
     print("Search result for price 22.0:", result)
 
-    # Test delete by price (non-primary key)
+    # Test delete by price (non-indexes key)
     delete_by_price = {
         "op": "remove",
         "field": "price", 
@@ -159,7 +159,7 @@ def SeqTest():
 def IsamTest():
     table2 = "products"
     fields2 = [
-        {"name": "product_id", "type": "i", "key": "primary", "index": "isam"},
+        {"name": "product_id", "type": "i", "key": "indexes", "index": "isam"},
         {"name": "name", "type": "s", "length": 32},
         {"name": "price", "type": "f"},
         {"name": "stock", "type": "i"}

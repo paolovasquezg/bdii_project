@@ -210,7 +210,7 @@ En caso de error, `ok:false` y un único `result` con `kind:"error"` y `error.co
 
 ```python
 def _prim_file_cls(self):
-    kind = (self.indexes or {}).get("primary", {}).get("index", "heap").lower()
+    kind = (self.indexes or {}).get("indexes", {}).get("index", "heap").lower()
     return {"heap": HeapFile, "sequential": SeqFile, "seq": SeqFile, "isam": IsamFile}.get(kind, HeapFile)
 ```
 

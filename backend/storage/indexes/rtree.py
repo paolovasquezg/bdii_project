@@ -1,4 +1,4 @@
-from backend.storage.primary.heap import HeapFile
+from backend.storage.indexes.heap import HeapFile
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import os, struct, io
@@ -365,12 +365,12 @@ class RTreeFile:
         return 1
 
     def stats(self) -> dict:
-        return basic_stats(self.store.height, -1, self.store.pages_read, self.store.pages_written, 0.0)
+        return basic_stats(self.store.height, -1, self.store.read_count, self.store.write_count, 0.0)
 
 
 
 # Header binario del archivo R-Tree
-HEADER_FMT = "<4sBHHIHIQQ"  # magic,ver,M,m,root,height,page_size,pages_read,pages_written
+HEADER_FMT = "<4sBHHIHIQQ"  # magic,ver,M,m,root,height,page_size,read_count,write_count
 MAGIC = b"RTRE"
 VERSION = 1
 DEFAULT_PAGE_SIZE = 4096
@@ -383,8 +383,8 @@ class Storage:
         self.page_size = DEFAULT_PAGE_SIZE
         self.root = 0
         self.height = 1
-        self.pages_read = 0
-        self.pages_written = 0
+        self.read_count = 0
+        self.write_count = 0
 
     def open(self):
         os.makedirs(os.path.dirname(self.filename), exist_ok=True)
@@ -392,7 +392,7 @@ class Storage:
             with open(self.filename, "wb") as f:
                 f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
                                     0, self.height, self.page_size,
-                                    self.pages_read, self.pages_written))
+                                    self.read_count, self.write_count))
                 f.write(b"\x00" * self.page_size)  # página 0
         else:
             with open(self.filename, "rb") as f:
@@ -405,22 +405,22 @@ class Storage:
             if magic != MAGIC or ver != VERSION:
                 with open(self.filename, "wb") as f:
                     self.root = 0; self.height = 1
-                    self.pages_read = 0; self.pages_written = 0
+                    self.read_count = 0; self.write_count = 0
                     f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
                                         0, self.height, self.page_size,
-                                        self.pages_read, self.pages_written))
+                                        self.read_count, self.write_count))
                     f.write(b"\x00" * self.page_size)
             else:
                 self.M, self.m, self.root, self.height = M, m, root, height
                 self.page_size = page_size
-                self.pages_read, self.pages_written = r, w
+                self.read_count, self.write_count = r, w
 
     def close(self):
         with open(self.filename, "r+b") as f:
             f.seek(0)
             f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
                                 self.root, self.height, self.page_size,
-                                self.pages_read, self.pages_written))
+                                self.read_count, self.write_count))
 
     # ---- páginas
     def alloc_page(self) -> int:
@@ -449,13 +449,13 @@ class Storage:
         with open(self.filename, "r+b") as f:
             f.seek(struct.calcsize(HEADER_FMT) + node.page_id * self.page_size)
             f.write(data)
-        self.pages_written += 1
+        self.write_count += 1
 
     def read_node(self, page_id: int) -> Node:
         with open(self.filename, "rb") as f:
             f.seek(struct.calcsize(HEADER_FMT) + page_id * self.page_size)
             raw = f.read(self.page_size)
-        self.pages_read += 1
+        self.read_count += 1
         is_leaf, count = struct.unpack_from("<B H", raw, 0)
         off = 3
         entries: List[Entry] = []
@@ -507,8 +507,8 @@ def basic_stats(height: int, nodes: int, pages_r: int, pages_w: int, fill: float
     return {
         "height": height,
         "nodes": nodes,
-        "pages_read": pages_r,
-        "pages_written": pages_w,
+        "read_count": pages_r,
+        "write_count": pages_w,
         "avg_fill": round(fill, 3)
     }
 
@@ -532,6 +532,8 @@ class RTree:
         idx_dir.mkdir(parents=True, exist_ok=True)
         self.filename = str(idx_dir / f"{table}-rtree-{column}.idx")
         self.rt = RTreeFile(self.filename, M=M)
+        self.read_count = self.rt.store.read_count
+        self.write_count = self.rt.store.write_count
 
     # --- escritura ---
     def insert(self, record: dict):
