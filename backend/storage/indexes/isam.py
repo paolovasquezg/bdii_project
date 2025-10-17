@@ -515,36 +515,53 @@ class IsamFile:
         indexformat, indexsize, _, _ = self.get_metrics(additional)
 
         with open(self.index_filename, "r+b") as indexfile:
-
             root = IndexPage.getPage(indexfile, 1, indexformat, indexsize)
-            self.read_count+=1
+            self.read_count += 1
 
+            # localizar leaf
             leaf_page = 0
-
             for i in range(len(root.indexes)):
-
                 if additional["value"] <= root.indexes[i].key:
                     leaf_page = root.indexes[i].page
                     break
-
-            if (leaf_page == 0):
-                return []
+            if leaf_page == 0:
+                leaf_page = root.indexes[-1].page
 
             leaf = IndexPage.getPage(indexfile, leaf_page, indexformat, indexsize)
-            self.read_count+=1
+            self.read_count += 1
 
+            # localizar data_page candidata dentro del leaf y recordar índice
             data_page = 0
-
+            leaf_idx = -1
             for i in range(len(leaf.indexes)):
                 if additional["value"] <= leaf.indexes[i].key:
                     data_page = leaf.indexes[i].page
+                    leaf_idx = i
                     break
+            if data_page == 0:
+                data_page = leaf.indexes[-1].page
+                leaf_idx = len(leaf.indexes) - 1
 
-            if (data_page == 0):
-                return []
-
+            # intento normal
             with open(self.filename, "r+b") as mainfile:
-                return self.search_on_page(additional, mainfile, data_page)
+                out = self.search_on_page(additional, mainfile, data_page)
+                if out:
+                    return out
+
+                # 🔁 Fallback robusto: busca en páginas vecinas del MISMO leaf
+                # (hacia atrás y hacia adelante). Corrige desalineaciones límite.
+                # hacia atrás
+                for j in range(leaf_idx - 1, -1, -1):
+                    out = self.search_on_page(additional, mainfile, leaf.indexes[j].page)
+                    if out:
+                        return out
+                # hacia adelante
+                for j in range(leaf_idx + 1, len(leaf.indexes)):
+                    out = self.search_on_page(additional, mainfile, leaf.indexes[j].page)
+                    if out:
+                        return out
+
+        return []
 
     def search_seq(self, additional: dict):
 

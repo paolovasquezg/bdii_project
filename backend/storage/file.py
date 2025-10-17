@@ -171,8 +171,12 @@ class File:
         return out
 
     def _usable_secondary_kind(self, field: str):
+        # Nunca prefieras un "secundario" cuando el campo es la PK.
+        if field == self.primary_key:
+            return None
         meta = self.indexes.get(field)
-        if not meta: return None
+        if not meta:
+            return None
         kind = (meta.get("index") or "").lower()
         return kind if kind in ("hash", "bplus", "rtree") else None
 
@@ -287,6 +291,7 @@ class File:
             if self.indexes[index]["filename"] == mainfilename and index != "primary":
                 additional["key"] = index
                 break
+
         for field in self.relation:
             if "key" in self.relation[field] and self.relation[field]["key"] in ("primary", "unique"):
                 additional["unique"].append(field)
@@ -325,9 +330,11 @@ class File:
             self.io_merge(isf, "isam")
 
         elif maindex == "bplus":
+            additional["key"] = self.primary_key
             bp = BPlusFile(mainfilename)
-            bp.insert(record, additional)
-            records = [record]                                   # [row_dict]
+            records = bp.insert(record, additional)
+            if not records:
+                records = [record]
             self.io_merge(bp, "bplus")
             self.index_log("primary", "bplus", self.primary_key, "insert")
 
@@ -521,6 +528,14 @@ class File:
                 )
             records = ret_records
 
+            if records and isinstance(records, list):
+                first = records[0]
+                # Si ya tengo filas completas (tienen la PK y NO traen 'pk' token),
+                # entonces NO vuelvas a resolver por pk: regrésalas tal cual.
+                if isinstance(first, dict) and (self.primary_key in first) and ("pk" not in first):
+                    self.last_io = self.io_get()
+                    return records
+
         self.last_io = self.io_get()
         return records
 
@@ -621,6 +636,12 @@ class File:
                     self.search({"op": "search", "field": self.primary_key, "value": rec["pk"]})
                 )
             records = ret_records
+
+            if records and isinstance(records, list):
+                first = records[0]
+                if isinstance(first, dict) and (self.primary_key in first) and ("pk" not in first):
+                    self.last_io = self.io_get()
+                    return records
 
         self.last_io = self.io_get()
         return records

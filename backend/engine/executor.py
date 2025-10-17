@@ -444,7 +444,6 @@ class Executor:
                                         overall_ok = False
                             except Exception:
                                 pass
-
                             if not dup_confirmed:
                                 results.append(err_result(action, "EXEC_ERROR", str(ex),
                                                           detail={"plan": p}, plan=plan_safe,

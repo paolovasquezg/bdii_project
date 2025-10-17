@@ -1,12 +1,11 @@
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from .settings import DATA_DIR
-from backend.catalog.catalog import load_tables, save_tables, put_json, table_meta_path
+from backend.catalog.settings import DATA_DIR
+from backend.catalog.catalog import load_tables, save_tables, put_json, table_meta_path, get_json
+import shutil
 
-import struct
-from backend.core.utils import build_format
-from backend.core.record import Record
+
 from backend.storage.indexes.hash import ExtendibleHashingFile
 from backend.storage.indexes.heap import HeapFile
 from backend.storage.indexes.sequential import SeqFile
@@ -162,6 +161,7 @@ def create_table(table: str, fields: List[Dict]):
             index = {"index": kind, "filename": str(idx_path)}
             if field.get("key") == "primary":
                 indexes["primary"] = index
+
             indexes[name] = index
 
         # schema físico para el primario (sin metacampos)
@@ -186,13 +186,9 @@ def create_table(table: str, fields: List[Dict]):
     mainfilename = indexes["primary"]["filename"]
     prim_kind = indexes["primary"]["index"]
 
-    if prim_kind in ("heap", "sequential", "isam"):
-        prim_schema = list(new_schema)
-        prim_schema.append({"name": "deleted", "type": "?"})
-        put_json(mainfilename, [prim_schema])
-    else:
-        # bplus / rtree / hash como primario → que la implementación lo inicialice
-        Path(mainfilename).write_bytes(b"")
+    prim_schema = list(new_schema)
+    prim_schema.append({"name": "deleted", "type": "?"})
+    put_json(mainfilename, [prim_schema])
 
     # 7) archivos de índices secundarios (si hay)
     for col, info in indexes.items():
@@ -221,15 +217,6 @@ def create_table(table: str, fields: List[Dict]):
     # 8) registrar la tabla
     tables[table] = str(table_file)
     save_tables(tables)
-
-# --- NUEVO ---
-import shutil
-
-# importa get_json también (ajusta import arriba si falta)
-try:
-    from .catalog import get_json
-except ImportError:
-    from backend.catalog import get_json
 
 def _find_pk_name(relation: Dict[str, Dict]) -> Optional[str]:
     for col, spec in relation.items():
