@@ -326,7 +326,7 @@ class File:
 
         elif maindex == "bplus":
             bp = BPlusFile(mainfilename)
-            bp.insert(record, {"key": self.primary_key})
+            bp.insert(record, additional)
             records = [record]                                   # [row_dict]
             self.io_merge(bp, "bplus")
             self.index_log("primary", "bplus", self.primary_key, "insert")
@@ -564,7 +564,7 @@ class File:
                     bp = BPlusFile(mainfilename)
                     additional["min"] = params["min"]
                     additional["max"] = params["max"]
-                    records = bp.range_search(additional, same_key=True)
+                    records = bp.range_search(additional, same_key)
                     self.index_log("primary", "bplus", field, "range_search")
                     self.io_merge(bp, "bplus")
                 except Exception as e:
