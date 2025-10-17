@@ -507,3 +507,26 @@ class BPlusFile:
                 page = node.next_node
 
         return removed
+    
+    def get_all(self):
+        result = []
+        with open(self.filename, 'rb') as f:
+            schema_size = self._read_schema_size(f)
+            root_page = self._get_root_page()
+            page = root_page
+            while True:
+                node = self._read_node_at(f, schema_size, page)
+                if node.is_leaf:
+                    break
+                if len(node.children) > 0:
+                    page = node.children[0]
+                else:
+                    break
+
+            while page != -1:
+                node = self._read_node_at(f, schema_size, page)
+                for rec in node.records:
+                    if not rec.fields.get('deleted', False):
+                        result.append(dict(rec.fields))
+                page = node.next_node
+        return result

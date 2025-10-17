@@ -475,3 +475,56 @@ class SeqFile:
                 records.extend(self.linear_delete(seqfile, additional, aux_elements))
 
         return records
+    
+
+    def get_all(self):
+        records = []
+
+        with open(self.filename, "r+b") as seqfile:
+
+            schema_size = struct.unpack("I", seqfile.read(4))[0]
+            self.read_count += 1
+
+            seqfile.seek(0, 2)
+            end = seqfile.tell()
+
+            if (end == 4 + schema_size):
+                return []
+
+            seqfile.seek(4 + schema_size)
+            main_elements = struct.unpack("I", seqfile.read(4))[0]
+            self.read_count += 1
+
+            for _ in range(main_elements):
+                data = seqfile.read(self.REC_SIZE)
+                self.read_count += 1
+
+                record = Record.unpack(data, self.format, self.schema)
+
+                if not record.fields["deleted"]:
+                    del record.fields["deleted"]
+                    records.append(record.fields)
+            
+            seqfile.seek(4 + schema_size + 4 + (self.REC_SIZE * main_elements))
+            aux_elements = struct.unpack("I", seqfile.read(4))[0]
+            self.read_count += 1
+
+            for _ in range(aux_elements):
+                data = seqfile.read(self.REC_SIZE)
+                self.read_count += 1
+
+                record = Record.unpack(data, self.format, self.schema)
+
+                if not record.fields["deleted"]:
+                    del record.fields["deleted"]
+                    records.append(record.fields)
+
+        return records
+
+
+
+
+            
+
+
+

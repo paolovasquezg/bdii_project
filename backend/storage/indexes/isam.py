@@ -842,3 +842,53 @@ class IsamFile:
             return self.remove_index(additional)
         else:
             return self.remove_seq(additional)
+    
+
+    def get_all_on_page(self, mainfile, page_number):
+        mainfile.seek(0)
+        schema_size = struct.unpack("I", mainfile.read(4))[0]
+        self.read_count+=1
+
+        page = DataPage.getPage(mainfile, page_number, self.format, self.REC_SIZE, self.schema, schema_size)
+        self.read_count+=1
+
+        records = []
+
+        while True:
+
+            if len(page.records) == 0:
+                break
+
+            for record in page.records:
+
+                del record.fields["deleted"]
+                records.append(record.fields)
+
+            if (page.next_page != -1):
+                page = DataPage.getPage(mainfile, page.next_page, self.format, self.REC_SIZE, self.schema, schema_size)
+                self.read_count+=1
+
+            else:
+                break
+
+        return records
+
+
+    def get_all(self):
+
+        records = []
+
+        with open(self.filename, "r+b") as mainfile:
+
+            mainfile.seek(0)
+            schema_size = struct.unpack("I", mainfile.read(4))[0]
+            self.read_count+=1
+            
+            page_size = DataPage.HEADER_SIZE + (self.REC_SIZE * PAGE_FACTOR)
+
+            number_pages = DataPage.getTotalPages(mainfile,page_size,schema_size)
+
+            for page_number in range(1, number_pages+1):
+                records.extend(self.get_all_on_page(mainfile, page_number))
+        
+        return records
