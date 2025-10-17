@@ -8,36 +8,33 @@ import struct
 from backend.core.utils import build_format
 from backend.core.record import Record
 from backend.storage.indexes.hash import ExtendibleHashingFile
+from backend.storage.indexes.heap import HeapFile
+from backend.storage.indexes.sequential import SeqFile
+from backend.storage.indexes.isam import IsamFile
 from backend.storage.indexes.bplus import BPlusFile
 from backend.storage.file import File
 
 
-def _iter_primary_rows_with_pos(mainfilename: str):
-    """
-    Lee el archivo físico principal y devuelve (row_dict, pos) de cada registro no borrado.
-    Sirve para cualquier primario (heap, sequential, isam, bplus) porque el layout
-    binario es el mismo: [4 bytes tam_schema][schema JSON][registros fijos].
-    """
-    schema = get_json(mainfilename)[0]              # 1) esquema
-    fmt = build_format(schema)
-    rec_size = struct.calcsize(fmt)
+def get_physical_records(mainfilename: str, main_index: str, pos: bool):
 
-    with open(mainfilename, "rb") as f:
-        schema_size = struct.unpack("<I", f.read(4))[0]
-        f.seek(0, 2); end = f.tell()
-        f.seek(4 + schema_size)
+    records = []
+    
+    if main_index == "heap":
+        GetFile = HeapFile(mainfilename)
+        records = GetFile.get_all(pos)
+    elif main_index == "sequential":
+        GetFile = SeqFile(mainfilename)
+        records = GetFile.get_all()
+    elif main_index == "isam":
+        GetFile = IsamFile(mainfilename)
+        records = GetFile.get_all()
+    else:
+        GetFile = BPlusFile(mainfilename)
+        records = GetFile.get_all()
+    
+    return records
 
-        while f.tell() < end:
-            pos = f.tell()
-            blob = f.read(rec_size)
-            if not blob or len(blob) < rec_size:
-                break
-            rec = Record.unpack(blob, fmt, schema)  # -> objeto con .fields
-            row = getattr(rec, "fields", {}) or {}
-            if not row.get("deleted", False):
-                yield row, pos
-
-def _backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
+def backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
     """
     Llena el índice secundario de 'column' con los datos existentes del primario.
     """
@@ -52,13 +49,14 @@ def _backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
 
     if sec_kind == "hash":
         h = ExtendibleHashingFile(sec_file)
-        for row, pos in _iter_primary_rows_with_pos(main):
-            if column not in row:
-                continue
+
+        records = get_physical_records(main, prim_kind, True)
+
+        for record in records:
             if prim_kind == "heap":
-                rec = {"pos": pos, column: row[column], "deleted": False}
+                rec = {"pos": record[1], column: record[0][column], "deleted": False}
             else:
-                rec = {"pk": row[pk_name], column: row[column], "deleted": False}
+                rec = {"pk": record[pk_name], column: record[column], "deleted": False}
             try:
                 h.insert(rec, key_name=column)
             except Exception:
@@ -66,17 +64,36 @@ def _backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
 
     elif sec_kind == "bplus":
         bp = BPlusFile(sec_file)
-        for row, pos in _iter_primary_rows_with_pos(main):
-            if column not in row:
-                continue
+        records = get_physical_records(main, prim_kind, True)
+        for record in records:
             if prim_kind == "heap":
-                rec = {"pos": pos, column: row[column], "deleted": False}
+                rec = {"pos": record[1], column: record[0][column], "deleted": False}
             else:
-                rec = {column: row[column], "pk": row[pk_name], "deleted": False}
+                rec = {"pk": record[pk_name], column: record[column], "deleted": False}
             try:
                 bp.insert(rec, {"key": column})
             except Exception:
                 pass
+
+    elif sec_kind == "rtree":
+
+        records = get_physical_records(main, prim_kind, True)
+
+        rt = File._make_rtree(column, heap_ok=(prim_kind=="heap"))
+        if prim_kind == "heap":
+            for row_dict, pos in records:
+                if column not in row_dict: continue
+                ok, pt = File._as_point(row_dict[column])
+                if not ok: continue
+                in_rec = {"pos": pos, column: pt, "deleted": False}
+                rt.insert(in_rec)
+        else:
+            for row_dict in records:
+                if column not in row_dict: continue
+                ok, pt = File._as_point(row_dict[column])
+                if not ok: continue
+                in_rec = {"pk": row_dict[pk_name], column: pt, "deleted": False}
+                rt.insert(in_rec)
 
 def _canon_index_kind(method: str) -> str:
     m = (method or "").strip().lower().replace(" ", "")
@@ -236,55 +253,110 @@ def drop_table(table: str):
         del tables[table]
         save_tables(tables)
 
+def get_table_descp(relation: dict, indexes: dict):
+
+    fields = []
+
+    for key in relation:
+
+        field = relation[key]
+
+        field["name"] = key
+
+        fields.append(field)
+    
+    for index in indexes:
+
+        if index != "primary":
+
+            for i in range(len(fields)):
+
+                if index == fields[i]["name"]:
+                    fields[i]["index"] = indexes[index]["index"]
+
+    return fields
+
+def add_index(fields: list[dict], column: str, method: str):
+
+    for i in range(len(fields)):
+
+        if fields[i]["name"] == column:
+            fields[i]["index"] = method
+            break
+
+    return fields
+
+def delete_index(fields: list[dict], column: str):
+    for i in range(len(fields)):
+
+        if fields[i]["name"] == column:
+            del fields[i]["index"]
+            break
+
+    return fields
+
+
 def create_index(table: str, column: str, method: str):
     """
     Crea un índice secundario en DATA_DIR/<table>/<table>-<methodToken>-<column>.dat
     y actualiza el metadato <table>.dat (indexes[column]).
     No recrea si ya existe.
     """
-    meta = table_meta_path(table)  # p.ej. runtime/files/products/products.dat
+    meta = table_meta_path(table)
     relation, indexes = get_json(str(meta), 2)
 
-    # ya existe
-    if column in indexes:
+    if not table or column in indexes:
         return
+    
+    if "key" in relation[column] and relation[column]["key"] == "primary":
+        
+        if method == "hash" or method == "rtree":
+            return
+        
+        mainfilename = indexes["primary"]["filename"]
+        main_index = indexes["primary"]["index"]
+        
+        records = get_physical_records(mainfilename, main_index, False)
+        table_desp = get_table_descp(relation, indexes)
+        table_desp = add_index(table_desp, column, method)
 
-    # normalizar metodo
-    kind = _canon_index_kind(method)
-    token = _filename_token(method)
+        drop_table(table)
+        create_table(table, table_desp)
 
-    # ruta del archivo índice
-    idx_path = DATA_DIR / table / f"{table}_{token}_{column}.dat"
-    idx_file = str(idx_path)
-
-    # schema: [col, pk/pos, deleted]
-    col_spec = {"name": column, **relation.get(column, {})}
-    pk_name = _find_pk_name(relation)
-    if not pk_name:
-        raise ValueError(f"No se pudo determinar PK para la tabla {table}")
-    pk_spec = relation[pk_name]
-
-    idx_schema = [col_spec]
-    primary_index_type = indexes.get("primary", {}).get("index", "heap")
-    if primary_index_type == "heap":
-        idx_schema.append({"name": "pos", "type": "i"})
+        InsFile = File(table)
+        InsFile.execute({"op": "build", "records": records})
+    
     else:
-        if "length" in pk_spec:
-            idx_schema.append({"name": "pk", "type": pk_spec["type"], "length": pk_spec["length"]})
-        else:
-            idx_schema.append({"name": "pk", "type": pk_spec["type"]})
-    idx_schema.append({"name": "deleted", "type": "?"})
+        kind = _canon_index_kind(method)
+        token = _filename_token(method)
 
-    # persistir índice secundario vacío y actualizar metadato
-    put_json(idx_file, [idx_schema])
-    indexes[column] = {"index": kind, "filename": idx_file}
-    put_json(str(meta), [relation, indexes])
-    try:
-        _backfill_secondary(table, column, relation, indexes)
-    except Exception as e:
-        # Si algo sale mal, al menos no dejamos roto el DDL
-        # (podés loggear 'e' si querés)
-        pass
+        idx_path = DATA_DIR / table / f"{table}_{token}_{column}.dat"
+        idx_file = str(idx_path)
+
+        col_spec = {"name": column, **relation.get(column, {})}
+        pk_name = _find_pk_name(relation)
+        if not pk_name:
+            raise ValueError(f"No se pudo determinar PK para la tabla {table}")
+        pk_spec = relation[pk_name]
+
+        idx_schema = [col_spec]
+        primary_index_type = indexes.get("primary", {}).get("index", "heap")
+        if primary_index_type == "heap":
+            idx_schema.append({"name": "pos", "type": "i"})
+        else:
+            if "length" in pk_spec:
+                idx_schema.append({"name": "pk", "type": pk_spec["type"], "length": pk_spec["length"]})
+            else:
+                idx_schema.append({"name": "pk", "type": pk_spec["type"]})
+        idx_schema.append({"name": "deleted", "type": "?"})
+
+        put_json(idx_file, [idx_schema])
+        indexes[column] = {"index": kind, "filename": idx_file}
+        put_json(str(meta), [relation, indexes])
+        try:
+            backfill_secondary(table, column, relation, indexes)
+        except Exception as e:
+            pass
 
 def drop_index(table: Optional[str], column_or_name: Optional[str]):
     """
@@ -293,20 +365,32 @@ def drop_index(table: Optional[str], column_or_name: Optional[str]):
     """
     if not table or not column_or_name:
         return
+    
     meta = table_meta_path(table)
     relation, indexes = get_json(str(meta), 2)
 
     col = column_or_name
-    if col == "primary" or col not in indexes:
-        # no eliminamos índice primario desde aquí
-        return
+    
+    if "key" in relation[col] and relation[col]["key"] == "primary":
+        
+        mainfilename = indexes["primary"]["filename"]
+        main_index = indexes["primary"]["index"]
+        
+        records = get_physical_records(mainfilename, main_index, False)
+        table_desp = get_table_descp(relation, indexes)
+        table_desp = delete_index(table_desp, col)
 
-    # borrar archivo del índice (si existe)
-    try:
-        Path(indexes[col]["filename"]).unlink(missing_ok=True)
-    except Exception:
-        pass
+        drop_table(table)
+        create_table(table, table_desp)
 
-    # quitar del metadato
-    del indexes[col]
-    put_json(str(meta), [relation, indexes])
+        InsFile = File(table)
+        InsFile.execute({"op": "build", "records": records})
+
+    else:
+        try:
+            Path(indexes[col]["filename"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        del indexes[col]
+        put_json(str(meta), [relation, indexes])

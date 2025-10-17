@@ -760,6 +760,27 @@ class File:
 
         self.last_io = self.io_get()
         return records
+    
+    def get_all(self):
+        mainfilename = self.indexes["primary"]["filename"]
+        mainindx = self.indexes["primary"]["index"]
+
+        records = []
+    
+        if mainindx == "heap":
+            GetFile = HeapFile(mainfilename)
+            records = GetFile.get_all(False)
+        elif mainindx == "sequential":
+            GetFile = SeqFile(mainfilename)
+            records = GetFile.get_all()
+        elif mainindx == "isam":
+            GetFile = IsamFile(mainfilename)
+            records = GetFile.get_all()
+        else:
+            GetFile = BPlusFile(mainfilename)
+            records = GetFile.get_all()
+        
+        return records
 
     # ----------------------------------- execute ------------------------------------ #
 
@@ -834,3 +855,6 @@ class File:
                     inserted += 1
             self.last_io = self.io_get()
             return {"count": inserted}
+        
+        elif params["op"] == "get_all":
+            return self.get_all()

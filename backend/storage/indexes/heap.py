@@ -166,7 +166,7 @@ class HeapFile:
 
         return ret_records
     
-    def get_all(self):
+    def get_all(self, get_pos = False):
         with open(self.filename, "rb") as heapfile:
             schema_size = struct.unpack("I", heapfile.read(4))[0]
             self.read_count += 1
@@ -178,12 +178,17 @@ class HeapFile:
             records = []
 
             while (heapfile.tell() != end):
+                pos = heapfile.tell()
                 data = heapfile.read(self.REC_SIZE)
                 self.read_count += 1
 
                 record = Record.unpack(data, self.format, self.schema)
                 if not record.fields["deleted"]:
                     del record.fields["deleted"]
-                    records.append(record.fields)
+
+                    if get_pos:
+                        records.append((record.fields, pos))
+                    else:
+                        records.append(record)
 
         return records
