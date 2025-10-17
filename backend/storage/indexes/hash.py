@@ -3,12 +3,10 @@ from backend.core.record import Record
 from backend.catalog.catalog import get_json
 from backend.core.utils import build_format
 
-# ================== Constantes ==================
+
 BUCKET_SIZE = 3
 HEADER_FORMAT = 'ii'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
-
-# Límite base de cadena; se ampliará dinámicamente si el split no reparte
 INITIAL_MAX_CHAIN = 2
 
 # ================== Bucket ==================
@@ -80,12 +78,10 @@ class ExtendibleHashingFile:
         self.read_count = 0
         self.write_count = 0
 
-        # campo del índice (se fija en el primer insert/find)
-        self.key_name = None
 
+        self.key_name = None
         self._load_or_init()
 
-    # ---------- helpers ----------
     def _json_offset(self) -> int:
         try:
             with open(self.filename, 'rb') as f:
@@ -98,11 +94,9 @@ class ExtendibleHashingFile:
             return 0
 
     def _pages_base_offset(self) -> int:
-        # JSON + header(8) + directorio actual (4 bytes por entrada)
         return self._json_offset() + 8 + len(self.directory) * 4
 
     def _get_page_offset(self, page_idx):
-        # Offset de página independiente de global_depth
         return self._pages_base_offset() + page_idx * (HEADER_SIZE + self.bucket_disk_size)
 
     def _hash(self, key):
@@ -117,7 +111,6 @@ class ExtendibleHashingFile:
     def _max_chain_length(self):
         return INITIAL_MAX_CHAIN + self.global_depth
 
-    # ---------- load/init ----------
     def _load_or_init(self):
         try:
             with open(self.filename, 'r+b') as f:
@@ -152,7 +145,6 @@ class ExtendibleHashingFile:
             f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
             f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
 
-            # buckets 0 y 1 (offset fijo relativo al directorio actual)
             f.seek(self._get_page_offset(0))
             f.write(struct.pack('i', 1))
             f.write(struct.pack('i', -1))
@@ -165,7 +157,6 @@ class ExtendibleHashingFile:
 
             self.write_count += 3
 
-    # ---------- IO ----------
     def _read_bucket(self, page_idx):
         with open(self.filename, 'rb') as f:
             offset = self._get_page_offset(page_idx)
@@ -203,7 +194,6 @@ class ExtendibleHashingFile:
             cur = b.overflow_page
         return chain
 
-    # ---------- ops ----------
     def find(self, key_value, key_name="id"):
         if self.key_name is None:
             self.key_name = key_name
@@ -232,7 +222,6 @@ class ExtendibleHashingFile:
         return zeros, ones
 
     def insert(self, record_data, key_name="id"):
-        # fija key del índice si aún no la conoce
         if self.key_name is None:
             self.key_name = key_name
 
@@ -255,32 +244,25 @@ class ExtendibleHashingFile:
             new_overflow_page = self.next_page_idx
             self.next_page_idx += 1
 
-            # actualizar enlace del último bucket
             last_bucket.overflow_page = new_overflow_page
             self._write_bucket(last_page, last_bucket)
 
-            # crear nuevo bucket con el registro
             new_overflow = Bucket(local_depth=last_bucket.local_depth, overflow_page=-1)
             rec = Record(self.schema, self.format, record_data)
             new_overflow.put(rec)
             self._write_bucket(new_overflow_page, new_overflow)
 
-            # persistir next_page_idx
             self._write_directory()
             return record_data
 
         # 3) si se alcanzó el máximo de la cadena -> intentar split
-        # intentamos split aunque el bucket parezca "no splittable"; si no ayuda, hacemos fallback
         head_bucket = chain[0][1]
         old_local = head_bucket.local_depth
-        # (opcional) info de splittable
         zeros, ones = self._chain_bit_counts(chain, old_local)
         splittable = (zeros > 0 and ones > 0)
 
-        # intentar split (siempre)
         self._split(dir_idx, page_idx, chain)
 
-        # después del split, intentar insertar de nuevo en la (posible) nueva cadena
         dir_idx = self._get_bucket_idx(key_value)
         page_idx = self.directory[dir_idx]
         new_chain = self._read_chain(page_idx)
@@ -291,7 +273,7 @@ class ExtendibleHashingFile:
                 self._write_bucket(curr_page, curr_bucket)
                 return record_data
 
-        # 4) fallback: si el split no ayudó -> crear overflow igual para no entrar en bucle
+        # 4) fallback: si el split no ayudó
         last_page, last_bucket = new_chain[-1]
         new_overflow_page = self.next_page_idx
         self.next_page_idx += 1
@@ -312,32 +294,27 @@ class ExtendibleHashingFile:
         old_local = head_bucket.local_depth
 
         if old_local == self.global_depth:
-            # duplicar directorio
             self.directory = self.directory + self.directory
             self.global_depth += 1
 
         new_page_idx = self.next_page_idx
         self.next_page_idx += 1
 
-        # recollect records de toda la cadena (sólo registros, no overflow pointers)
         old_records = []
         for _, b in chain:
             old_records.extend(b.records)
 
-        # limpiar la cadena (poner buckets vacíos y sin overflow)
         for curr_page, curr_bucket in chain:
             curr_bucket.records = []
             curr_bucket.overflow_page = -1
             self._write_bucket(curr_page, curr_bucket)
 
-        # configurar hermano y cabeza con local_depth incrementado
         head_bucket.local_depth = old_local + 1
         head_bucket.records = []
         head_bucket.overflow_page = -1
 
         new_bucket = Bucket(local_depth=old_local + 1, overflow_page=-1)
 
-        # reasignar entradas del directorio que apuntan a page_idx
         stride_bit = 1 << old_local
         for i in range(len(self.directory)):
             if self.directory[i] == page_idx:
@@ -346,12 +323,10 @@ class ExtendibleHashingFile:
                 else:
                     self.directory[i] = page_idx
 
-        # persistir buckets y directorio
         self._write_bucket(page_idx, head_bucket)
         self._write_bucket(new_page_idx, new_bucket)
         self._write_directory()
 
-        # reinsertar registros recolectados
         for rec in old_records:
             self.insert(rec.fields)
 
