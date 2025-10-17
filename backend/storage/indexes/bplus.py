@@ -172,7 +172,7 @@ class BPlusFile:
                 if node.is_leaf:
                     return page, node
                 i = 0
-                while i < len(node.records) and value >= self._get_key_from_record(node.records[i], keyname):
+                while i < len(node.records) and value > self._get_key_from_record(node.records[i], keyname):
                     i += 1
                 if i < len(node.children):
                     page = node.children[i]
@@ -340,15 +340,59 @@ class BPlusFile:
                 return results
 
             leaf_page, leaf = self._find_leaf_page(val, keyname)
-            page = leaf_page
+            leftmost_page = leaf_page
+            current = leaf_page
+            while True:
+                node = self._read_node_at(f, schema_size, current)
+                if node.parent == -1:
+                    break
+
+                parent = self._read_node_at(f, schema_size, node.parent)
+                try:
+                    idx = parent.children.index(current)
+                except ValueError:
+                    break
+
+                if idx == 0:
+                    break
+
+                left_sibling_page = parent.children[idx - 1]
+                left_sibling = self._read_node_at(f, schema_size, left_sibling_page)
+
+                if not left_sibling.records:
+                    break
+
+                last_key = self._get_key_from_record(left_sibling.records[-1], keyname)
+                if last_key < val:
+                    break
+
+                leftmost_page = left_sibling_page
+                current = left_sibling_page
+
+            page = leftmost_page
             while page != -1:
                 node = self._read_node_at(f, schema_size, page)
+                found_any = False
                 for rec in node.records:
-                    if rec.fields.get(keyname) == val and not rec.fields.get('deleted'):
+                    rec_key = self._get_key_from_record(rec, keyname)
+                    if rec_key > val:
+                        # Past our target value, stop scanning
+                        return results
+                    if rec_key == val and not rec.fields.get('deleted'):
                         del rec.fields['deleted']
                         results.append(rec.fields)
+                        found_any = True
                         if additional.get('unique'):
                             return results
+
+                if node.records and not found_any:
+                    last_key = self._get_key_from_record(node.records[-1], keyname)
+                    if last_key < val:
+                        page = node.next_node
+                        continue
+                    if last_key > val:
+                        break
+
                 page = node.next_node
 
         return results

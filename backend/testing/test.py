@@ -27,18 +27,18 @@ CREATE TABLE products (
 """)
 
 
-run_sql("INSERT INTO products (product_id, name, price, stock) VALUES (1, 'laptop', 1500, 10)")
-run_sql("INSERT INTO products (product_id, name, price, stock) VALUES (1, 'laptop', 1500, 10)")
-
-run_sql("INSERT INTO products (product_id, name, price, stock) VALUES (2, 'mouse', 45.9, 250)")
+for i in range(1, 61):
+    run_sql(f"INSERT INTO products (product_id, name, price, stock) VALUES ({i}, 'mouse', 50, {i})")
 
 #run_sql("CREATE INDEX IF NOT EXISTS ON products (price) USING b+")
 
-run_sql("SELECT * FROM products WHERE name = 'laptop';")
+#run_sql("SELECT * FROM products WHERE price = 50;")
+
+run_sql("SELECT * FROM products WHERE name = 'mouse';")
 
 #run_sql("SELECT * FROM products WHERE product_id = 2")
 
-#run_sql("SELECT * FROM products WHERE price BETWEEN 40 AND 100")
+#run_sql("SELECT * FROM products WHERE product_id BETWEEN 1 AND 60")
 
 #run_sql("DELETE from products where product_id = 2")
 

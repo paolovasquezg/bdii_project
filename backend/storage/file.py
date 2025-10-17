@@ -8,8 +8,6 @@ from backend.storage.indexes.bplus import BPlusFile
 import json as _json
 import struct
 import csv
-from backend.core.utils import build_format
-from backend.core.record import Record
 import os
 import copy
 
@@ -448,12 +446,8 @@ class File:
             elif mainindx == "bplus":
                 try:
                     bp = BPlusFile(mainfilename)
-                    if same_key:
-                        hits = bp.search(additional, same_key=True)
-                        records = [hits] if isinstance(hits, dict) else (hits or [])
-                        self.index_log("primary", "bplus", field, "search")
-                    else:
-                        records = []
+                    records = bp.search(additional, same_key)
+                    self.index_log("primary", "bplus", field, "search")
                     self.io_merge(bp, "bplus")
                 except Exception as e:
                     if DEBUG_IDX: print("[BPLUS search primary] skip:", e)
@@ -469,13 +463,7 @@ class File:
             if kind == "hash":
                 try:
                     h = ExtendibleHashingFile(filename)
-                    hit = h.find(value, key_name=field)
-                    records = []
-                    if hit:
-                        if self.indexes["primary"]["index"] == "heap":
-                            if "pos" in hit: records = [{"pos": hit["pos"]}]
-                        else:
-                            records = [hit]
+                    records = h.find(value, key_name=field)
                     self.io_merge(h, "hash")
                     self.index_log("secondary", "hash", field, "search")
                 except Exception as e:
@@ -485,14 +473,7 @@ class File:
             elif kind == "bplus":
                 try:
                     bp = BPlusFile(filename)
-                    hits = bp.search(additional, same_key=True)
-                    records = []
-                    if self.indexes["primary"]["index"] == "heap":
-                        for h in (hits or []):
-                            if "pos" in h:
-                                records.append({"pos": h["pos"]})
-                    else:
-                        records = hits or []
+                    records = bp.search(additional, same_key=True)
                     self.io_merge(bp, "bplus")
                     self.index_log("secondary", "bplus", field, "search")
                 except Exception as e:
