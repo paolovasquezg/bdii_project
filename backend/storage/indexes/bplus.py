@@ -94,9 +94,10 @@ class BPlusFile:
         self.NODE_HEADER_SIZE = struct.calcsize(self.NODE_HEADER_FMT)
         self.INT_SIZE = struct.calcsize("i")
         self.PAGE_SIZE = (self.NODE_HEADER_SIZE + 4 + (Order * self.REC_SIZE) + 4 + ((Order + 1) * self.INT_SIZE) + 8)
-        self._ensure_root()
         self.read_count = 0
         self.write_count = 0
+        self._ensure_root()
+
 
     def _inc_read(self, n: int = 1):
         self.read_count += n
@@ -106,6 +107,7 @@ class BPlusFile:
 
     def _read_schema_size(self, f):
         f.seek(0)
+        self._inc_read()
         return struct.unpack('I', f.read(4))[0]
 
     def _page_offset(self, schema_size, page: int):
@@ -123,9 +125,11 @@ class BPlusFile:
         off = self._page_offset(schema_size, page)
         f.seek(off)
         data = f.read(self.PAGE_SIZE)
+        self._inc_read()
         return Node.unpack(data, self.REC_SIZE, self.format, self.schema)
 
     def _write_node_at(self, f, schema_size, page: int, node: Node):
+        self._inc_write()
         off = self._page_offset(schema_size, page)
         f.seek(off)
         data = node.pack(self.REC_SIZE)
@@ -142,8 +146,7 @@ class BPlusFile:
         if len(data) < self.PAGE_SIZE:
             data += b'\x00' * (self.PAGE_SIZE - len(data))
         f.write(data)
-        if node.is_leaf:
-            self._inc_write(len(node.records))
+        self._inc_write(len(node.records))
         return new_page
 
     def _ensure_root(self):
@@ -191,11 +194,9 @@ class BPlusFile:
             new_rec = Record(self.schema, self.format, record)
             i = 0
             while i < len(leaf.records) and self._get_key_from_record(leaf.records[i], keyname) < record[keyname]:
-                self._inc_read()
                 i += 1
 
             leaf.records.insert(i, new_rec)
-            self._inc_write()
 
             max_keys = Order - 1
             if len(leaf.records) > max_keys:
@@ -432,7 +433,6 @@ class BPlusFile:
                             node.records[idx] = rec
                             removed.append({k: v for k, v in rec.fields.items() if k != 'deleted'})
                             modified = True
-                            self._inc_write()
                             if additional.get('unique'):
                                 break
                     if modified:
@@ -454,7 +454,6 @@ class BPlusFile:
                         node.records[idx] = rec
                         removed.append({k: v for k, v in rec.fields.items() if k != 'deleted'})
                         modified = True
-                        self._inc_write()
                         if additional.get('unique'):
                             break
                 if modified:

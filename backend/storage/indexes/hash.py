@@ -71,8 +71,6 @@ class ExtendibleHashingFile:
         self.next_page_idx = 2
         self.read_count = 0
         self.write_count = 0
-
-
         self._load_or_init()
 
     def _hash(self, key):
@@ -84,17 +82,36 @@ class ExtendibleHashingFile:
         h = self._hash(key)
         return h & ((1 << self.global_depth) - 1)
 
+    def _json_offset(self) -> int:
+        with open(self.filename, 'rb') as f:
+            size_bytes = f.read(4)
+            if not size_bytes:
+                return 0
+            schema_size = struct.unpack('I', size_bytes)[0]
+        return 4 + schema_size
+
+    def _get_page_offset(self, page_idx):
+        dir_size_on_disk = 1 << self.global_depth
+        # JSON + [global_depth,next_page] + directory + (page * (bucket_size + depth_i))
+        return self._json_offset() + 8 + (dir_size_on_disk * 4) + (page_idx * (self.bucket_disk_size + 4))
+
     def _load_or_init(self):
         try:
             with open(self.filename, 'r+b') as f:
+                off = self._json_offset()
+                f.seek(off)
                 header = f.read(8)
-                if not header:
+                # archivo nuevo (solo JSON) o sucio ⇒ inicializar
+                if (not header) or header == b'\x00' * 8:
                     self._init_file()
                     return
                 self.read_count += 1
                 self.global_depth, self.next_page_idx = struct.unpack('ii', header)
                 dir_size = 1 << self.global_depth
                 dir_bytes = f.read(dir_size * 4)
+                if len(dir_bytes) != dir_size * 4:
+                    self._init_file()
+                    return
                 self.directory = list(struct.unpack(f'{dir_size}i', dir_bytes))
         except FileNotFoundError:
             self._init_file()
@@ -103,9 +120,12 @@ class ExtendibleHashingFile:
         self.global_depth = 1
         self.directory = [0, 1]
         self.next_page_idx = 2
-        with open(self.filename, 'wb') as f:
+        with open(self.filename, 'r+b') as f:
+            off = self._json_offset()
+            f.seek(off)
             f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
             f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
+            # dos buckets vacíos
             f.seek(self._get_page_offset(0))
             f.write(b'\x00' * self.bucket_disk_size)
             f.write(b'\x00' * self.bucket_disk_size)
@@ -113,9 +133,12 @@ class ExtendibleHashingFile:
         self._write_bucket_depth(0, 1)
         self._write_bucket_depth(1, 1)
 
-    def _get_page_offset(self, page_idx):
-        dir_size_on_disk = 1 << self.global_depth
-        return 8 + (dir_size_on_disk * 4) + (page_idx * (self.bucket_disk_size + 4))
+    def _write_directory(self):
+        with open(self.filename, 'r+b') as f:
+            f.seek(self._json_offset())
+            f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
+            f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
+            self.write_count += 1
 
     def _read_bucket(self, page_idx):
         with open(self.filename, 'rb') as f:
@@ -140,13 +163,6 @@ class ExtendibleHashingFile:
             offset = self._get_page_offset(page_idx)
             f.seek(offset)
             f.write(struct.pack('i', depth))
-            self.write_count += 1
-
-    def _write_directory(self):
-        with open(self.filename, 'r+b') as f:
-            f.seek(0)
-            f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
-            f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
             self.write_count += 1
 
     def find(self, key_value, key_name="id"):

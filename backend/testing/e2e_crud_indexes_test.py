@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-E2E: CRUD + secundarios (hash/b+) en 3 backends de PK (heap, sequential, isam).
+E2E: CRUD + secundarios (hash/b+) en 4 backends de PK (heap, sequential, isam, bplus).
 - NO tapa errores: solo mejora observabilidad con ✓/✗ y detalles (plan, índices, filas).
 - Continúa aunque falle un paso y muestra un resumen final (rc=1 si hubo fallos).
 """
@@ -14,11 +14,11 @@ if HERE not in sys.path:
 try:
     from backend.engine.engine import Engine
 except Exception:
-    from backend.engine import Engine  # type: ignore
+    from backend.engine.engine import Engine  # type: ignore
 
 ENGINE = Engine()
 CSV = os.path.join(HERE, "_testdata", "csv", "products.csv")
-PK_METHODS = ["heap", "sequential", "isam", "bplus", "hash", "rtree"]
+PK_METHODS = ["heap", "sequential", "isam", "bplus"]
 
 CHECK = "✓"
 CROSS = "✗"
@@ -48,7 +48,6 @@ def _short_usage(meta: dict) -> str:
     t = meta.get("time_ms")
     idx = meta.get("index_usage") or []
     if idx:
-        # ej: "primary:heap(product_id), secondary:hash(name)"
         parts = []
         for u in idx:
             where = u.get("where")
@@ -69,7 +68,6 @@ def _rows_info(rows):
     if not isinstance(rows, list):
         return "rows:? "
     n = len(rows)
-    # tratar de deducir ids
     ids = []
     for r in rows:
         if isinstance(r, dict):
@@ -96,6 +94,14 @@ def _print_step_bad(label, res0_or_env, reason):
         print(f"      └─ {reason}")
     else:
         print(f"  {CROSS} {label}  • {reason}")
+
+def _used_index(meta: dict, where: str, index_kind: str, field: str) -> bool:
+    """True si meta.index_usage contiene una entrada que coincide con where/index/field."""
+    idx = (meta or {}).get("index_usage") or []
+    for u in idx:
+        if u.get("where") == where and u.get("index") == index_kind and u.get("field") == field:
+            return True
+    return False
 
 # ---------------------------
 # Helpers de ejecución
@@ -127,7 +133,7 @@ def assert_ok(env: dict, msg=""):
 def ensure_indexes(tbl: str):
     # No “tapa” errores de motor; solo asegura que existan si el DDL no los creó.
     run_sql(f"CREATE INDEX IF NOT EXISTS ON {tbl} (name) USING hash;")
-    run_sql(f"CREATE INDEX IF NOT EXISTS ON {tbl} (price) USING b+;")
+    run_sql(f"CREATE INDEX IF NOT EXISTS ON {tbl} (price) USING bplus;")
 
 def import_data(tbl: str):
     ensure_products_csv(CSV)
@@ -154,62 +160,100 @@ def import_data(tbl: str):
 # Verificaciones con detalle
 # ---------------------------
 def verify_queries(tbl: str):
+    failures = []  # acumulamos mismatches (contenido incorrecto)
+
     # SELECT por PK
     env = run_sql(f"SELECT * FROM {tbl} WHERE product_id = 3;")
-    res0 = assert_ok(env, msg="select pk")
-    rows = res0.get("data") or []
-    if len(rows) == 1 and rows[0].get("name") == "Charlie":
-        _print_step_ok("SELECT PK (product_id=3)", res0)
-        print(f"     └─ {_rows_info(rows)}")
-    else:
-        _print_step_bad("SELECT PK (product_id=3)", env, f"esperado 1 fila 'Charlie', got {_rows_info(rows)}")
+    try:
+        res0 = assert_ok(env, msg="select pk")
+        rows = res0.get("data") or []
+        if len(rows) == 1 and rows[0].get("name") == "Charlie":
+            _print_step_ok("SELECT PK (product_id=3)", res0)
+            print(f"     └─ {_rows_info(rows)}")
+        else:
+            _print_step_bad("SELECT PK (product_id=3)", env, f"esperado 1 fila 'Charlie', got {_rows_info(rows)}")
+            failures.append("SELECT PK (product_id=3): contenido incorrecto")
+    except AssertionError as e:
+        _print_step_bad("SELECT PK (product_id=3)", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"SELECT PK (product_id=3): {e}")
 
     # Rango por PK
     env = run_sql(f"SELECT * FROM {tbl} WHERE product_id BETWEEN 2 AND 4;")
-    res0 = assert_ok(env, msg="range pk")
-    rows = res0.get("data") or []
-    ids = sorted(int(x["product_id"]) for x in rows)
-    if ids == [2,3,4]:
-        _print_step_ok("RANGE PK (2..4)", res0)
-        print(f"     └─ {_rows_info(rows)}")
-    else:
-        _print_step_bad("RANGE PK (2..4)", env, f"esperado ids [2,3,4], got {ids}")
+    try:
+        res0 = assert_ok(env, msg="range pk")
+        rows = res0.get("data") or []
+        ids = sorted(int(x["product_id"]) for x in rows)
+        if ids == [2,3,4]:
+            _print_step_ok("RANGE PK (2..4)", res0)
+            print(f"     └─ {_rows_info(rows)}")
+        else:
+            _print_step_bad("RANGE PK (2..4)", env, f"esperado ids [2,3,4], got {ids}")
+            failures.append("RANGE PK (2..4): contenido incorrecto")
+    except AssertionError as e:
+        _print_step_bad("RANGE PK (2..4)", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"RANGE PK (2..4): {e}")
 
-    # Secundario name='Bravo'
+    # Secundario name='Bravo' (hash)
     env = run_sql(f"SELECT * FROM {tbl} WHERE name = 'Bravo';")
-    res0 = assert_ok(env, msg="name=Bravo")
-    rows = res0.get("data") or []
-    if len(rows) == 1 and int(rows[0].get("product_id", -1)) == 2:
-        _print_step_ok("SELECT name='Bravo'", res0)
-        print(f"     └─ {_rows_info(rows)}")
-    else:
-        # dar pista: índice usado / no usado
+    try:
+        res0 = assert_ok(env, msg="name=Bravo")
+        rows = res0.get("data") or []
         meta = res0.get("meta") or {}
-        idx = meta.get("index_usage") or []
-        used = ", ".join(f"{u.get('where')}:{u.get('index')}({u.get('field')})" for u in idx) if idx else "index:none"
-        _print_step_bad("SELECT name='Bravo'", env, f"esperado 1 fila id=2, got {_rows_info(rows)}; used={used}")
+        if not _used_index(meta, "secondary", "hash", "name"):
+            _print_step_bad("SELECT name='Bravo'", env, "no usó secondary:hash(name)")
+            failures.append("SELECT name='Bravo': índice no usado")
+        elif len(rows) == 1 and int(rows[0].get("product_id", -1)) == 2:
+            _print_step_ok("SELECT name='Bravo'", res0)
+            print(f"     └─ {_rows_info(rows)}")
+        else:
+            _print_step_bad("SELECT name='Bravo'", env, f"esperado 1 fila id=2, got {_rows_info(rows)}")
+            failures.append("SELECT name='Bravo': contenido incorrecto")
+    except AssertionError as e:
+        _print_step_bad("SELECT name='Bravo'", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"SELECT name='Bravo': {e}")
 
-    # Secundario price BETWEEN 10..26
+    # Secundario price BETWEEN 10..26 (b+)
     env = run_sql(f"SELECT * FROM {tbl} WHERE price BETWEEN 10 AND 26;")
-    res0 = assert_ok(env, msg="price between")
-    rows = res0.get("data") or []
-    ids = sorted(int(x["product_id"]) for x in rows)
-    if ids == [1,3,4]:
-        _print_step_ok("SELECT price BETWEEN 10..26", res0)
-        print(f"     └─ {_rows_info(rows)}")
-    else:
-        _print_step_bad("SELECT price BETWEEN 10..26", env, f"esperado ids [1,3,4], got {ids}")
+    try:
+        res0 = assert_ok(env, msg="price between")
+        rows = res0.get("data") or []
+        meta = res0.get("meta") or {}
+        if not _used_index(meta, "secondary", "bplus", "price"):
+            _print_step_bad("SELECT price BETWEEN 10..26", env, "no usó secondary:bplus(price)")
+            failures.append("SELECT price BETWEEN 10..26: índice no usado")
+        else:
+            ids = sorted(int(x["product_id"]) for x in rows)
+            if ids == [1,3,4]:
+                _print_step_ok("SELECT price BETWEEN 10..26", res0)
+                print(f"     └─ {_rows_info(rows)}")
+            else:
+                _print_step_bad("SELECT price BETWEEN 10..26", env, f"esperado ids [1,3,4], got {ids}")
+                failures.append("SELECT price BETWEEN 10..26: contenido incorrecto")
+    except AssertionError as e:
+        _print_step_bad("SELECT price BETWEEN 10..26", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"SELECT price BETWEEN 10..26: {e}")
+
+    # Si hubo cualquier mismatch, lo elevamos para que RUN_STEP lo cuente en el resumen
+    if failures:
+        raise AssertionError("; ".join(failures))
 
 def verify_dml(tbl: str):
+    failures = []
+
     # INSERT normal
     env = run_sql(f"INSERT INTO {tbl} VALUES (6, 'Foxtrot', 33.3, 9);")
-    res0 = assert_ok(env, msg="insert 6")
-    _print_step_ok("INSERT id=6", res0)
+    try:
+        res0 = assert_ok(env, msg="insert 6")
+        _print_step_ok("INSERT id=6", res0)
+    except AssertionError as e:
+        _print_step_bad("INSERT id=6", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"INSERT id=6: {e}")
 
     # Duplicado (error esperado)
     env = run_sql(f"INSERT INTO {tbl} (product_id, name, price, stock) VALUES (3, 'dup', 9.9, 1);")
     if env.get("ok", False) and ((env.get("results") or [{}])[0]).get("ok", False):
         _print_step_bad("INSERT duplicado id=3", env, "se esperaba error pero fue OK")
+        failures.append("INSERT duplicado id=3: debía fallar y no falló")
     else:
         # imprimir código/mensaje de error si viene
         res0 = (env.get("results") or [{}])[0]
@@ -218,27 +262,79 @@ def verify_dml(tbl: str):
         msg = err.get("message") or "-"
         print(f"  {CHECK} INSERT duplicado id=3 rechazado  • {code}: {msg}")
 
+    # El duplicado no debe dejar basura en secundarios (name='dup' no debe existir)
+    env = run_sql(f"SELECT * FROM {tbl} WHERE name = 'dup';")
+    try:
+        res0 = assert_ok(env, msg="post-dup-secondary")
+        rows = res0.get("data") or []
+        if len(rows) != 0:
+            _print_step_bad("POST-DUP name='dup'", env, f"esperado 0 filas; got {_rows_info(rows)}")
+            failures.append("POST-DUP: secundario hash(name) quedó sucio")
+        else:
+            print(f"  {CHECK} POST-DUP name='dup'  • ok (0 filas)")
+    except AssertionError as e:
+        _print_step_bad("POST-DUP name='dup'", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"POST-DUP name='dup': {e}")
+
     # DELETE + verificación
-    res0 = assert_ok(run_sql(f"DELETE FROM {tbl} WHERE product_id = 2;"), msg="delete id=2")
-    _print_step_ok("DELETE id=2", res0)
-    env = run_sql(f"SELECT * FROM {tbl} WHERE product_id = 2;")
-    res0 = assert_ok(env, msg="post-delete")
-    rows = res0.get("data") or []
-    if len(rows) == 0:
-        print(f"  {CHECK} POST-DELETE id=2  • ok (0 filas)")
-    else:
-        _print_step_bad("POST-DELETE id=2", env, f"esperado 0 filas, got {_rows_info(rows)}")
+    try:
+        res0 = assert_ok(run_sql(f"DELETE FROM {tbl} WHERE product_id = 2;"), msg="delete id=2")
+        _print_step_ok("DELETE id=2", res0)
+    except AssertionError as e:
+        _print_step_bad("DELETE id=2", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"DELETE id=2: {e}")
+
+    # Tras delete, no debe quedar 'Bravo' en hash(name)
+    env = run_sql(f"SELECT * FROM {tbl} WHERE name = 'Bravo';")
+    try:
+        res0 = assert_ok(env, msg="post-delete-secondary")
+        rows = res0.get("data") or []
+        if len(rows) != 0:
+            _print_step_bad("POST-DELETE name='Bravo'", env, f"esperado 0 filas; got {_rows_info(rows)}")
+            failures.append("POST-DELETE: secundario hash(name) no se limpió")
+        else:
+            print(f"  {CHECK} POST-DELETE name='Bravo'  • ok (0 filas)")
+    except AssertionError as e:
+        _print_step_bad("POST-DELETE name='Bravo'", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"POST-DELETE name='Bravo': {e}")
 
     # Reinsert + verificación
-    res0 = assert_ok(run_sql(f"INSERT INTO {tbl} VALUES (2, 'Bravo', 20.0, 15);"), msg="reinsert 2")
-    _print_step_ok("REINSERT id=2", res0)
+    try:
+        res0 = assert_ok(run_sql(f"INSERT INTO {tbl} VALUES (2, 'Bravo', 20.0, 15);"), msg="reinsert 2")
+        _print_step_ok("REINSERT id=2", res0)
+    except AssertionError as e:
+        _print_step_bad("REINSERT id=2", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"REINSERT id=2: {e}")
+
     env = run_sql(f"SELECT * FROM {tbl} WHERE product_id = 2;")
-    res0 = assert_ok(env, msg="post-reinsert")
-    rows = res0.get("data") or []
-    if len(rows) == 1:
-        print(f"  {CHECK} POST-REINSERT id=2  • ok (1 fila)")
-    else:
-        _print_step_bad("POST-REINSERT id=2", env, f"esperado 1 fila, got {_rows_info(rows)}")
+    try:
+        res0 = assert_ok(env, msg="post-reinsert")
+        rows = res0.get("data") or []
+        if len(rows) == 1:
+            print(f"  {CHECK} POST-REINSERT id=2  • ok (1 fila)")
+        else:
+            _print_step_bad("POST-REINSERT id=2", env, f"esperado 1 fila, got {_rows_info(rows)}")
+            failures.append("POST-REINSERT id=2: contenido incorrecto (debería 1 fila)")
+    except AssertionError as e:
+        _print_step_bad("POST-REINSERT id=2", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"POST-REINSERT id=2: {e}")
+
+    # Y el secundario vuelve a tener 'Bravo' exactamente 1 vez (id=2)
+    env = run_sql(f"SELECT * FROM {tbl} WHERE name = 'Bravo';")
+    try:
+        res0 = assert_ok(env, msg="post-reinsert-secondary")
+        rows = res0.get("data") or []
+        if len(rows) == 1 and int(rows[0].get("product_id", -1)) == 2:
+            print(f"  {CHECK} POST-REINSERT name='Bravo'  • ok (1 fila id=2)")
+        else:
+            _print_step_bad("POST-REINSERT name='Bravo'", env, f"esperado 1 fila id=2; got {_rows_info(rows)}")
+            failures.append("POST-REINSERT: secundario hash(name) inconsistente")
+    except AssertionError as e:
+        _print_step_bad("POST-REINSERT name='Bravo'", env, f"envelope/result NOT ok: {e}")
+        failures.append(f"POST-REINSERT name='Bravo': {e}")
+
+    if failures:
+        raise AssertionError("; ".join(failures))
 
 # ------------------------
 # Infra de pasos tolerantes

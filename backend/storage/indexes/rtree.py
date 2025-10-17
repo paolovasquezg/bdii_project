@@ -530,7 +530,7 @@ class RTree:
         self.heap_file = heap_file
         idx_dir = Path(data_dir) / table
         idx_dir.mkdir(parents=True, exist_ok=True)
-        self.filename = str(idx_dir / f"{table}-rtree-{column}.idx")
+        self.filename = str(idx_dir / f"{table}_rtree_{column}.idx")
         self.rt = RTreeFile(self.filename, M=M)
         self.read_count = self.rt.store.read_count
         self.write_count = self.rt.store.write_count

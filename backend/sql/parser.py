@@ -114,8 +114,8 @@ class Column:
     name: str
     type: SQLType
     primary_key: bool = False
-    pk_using: Optional[str] = None        # PRIMARY KEY USING <método/organización>
-    inline_index: Optional[str] = None    # INDEX USING <método>
+    pk_using: Optional[str] = None        # PRIMARY KEY USING <metodo/organización>
+    inline_index: Optional[str] = None    # INDEX USING <metodo>
 
 @dataclass
 class CreateTable:
@@ -153,8 +153,9 @@ class Insert:
     kind: str = "insert"
     table: str = ""
     columns: Optional[List[str]] = None
-    values: Optional[List[Any]] = None
-    rows: List[List[Any]] = field(default_factory=list)
+    values: Optional[List[Any]] = None          # cuando viene un solo VALUES(...)
+    rows: List[List[Any]] = field(default_factory=list)  # VALUES(...),(...),...
+    from_file: Optional[str] = None             # opcional: INSERT INTO t FROM FILE 'path'
 
 @dataclass
 class Comparison:
@@ -310,8 +311,9 @@ class _Parser:
 
         name = self._parse_ident()
 
+        # CREATE TABLE t FROM [FILE] 'path' [USING INDEX <method>(col)]
         if self._accept("KW", "FROM"):
-            self._accept("KW", "FILE")  # opcional: permite FROM FILE o solo FROM
+            self._accept("KW", "FILE")  # opcional
             path = self._expect("STRING").value
 
             index_method = None
@@ -320,7 +322,6 @@ class _Parser:
                 self._expect("KW", "INDEX")
                 index_method = self._parse_method_token()
                 self._expect("OP", "(")
-                # aceptamos identificador o string para el nombre de la columna
                 col_tok = self._peek()
                 if col_tok and col_tok.kind in {"IDENT", "KW", "STRING"}:
                     index_column = self._parse_literal()
@@ -335,6 +336,7 @@ class _Parser:
                 index_method=index_method,
                 index_column=index_column
             )
+
         self._expect("OP", "(")
 
         cols: List[Column] = []
@@ -360,7 +362,7 @@ class _Parser:
                 typ = self._parse_type()
                 c = Column(name=colname, type=typ)
 
-                # 0..N restricciones inline (sin validación)
+                # 0..N restricciones inline
                 while True:
                     pos = self.i
                     try:
@@ -487,6 +489,12 @@ class _Parser:
                     break
                 self._expect("OP", ",")
 
+        # INSERT INTO t FROM [FILE] 'path'
+        if self._accept("KW", "FROM"):
+            self._accept("KW", "FILE")  # opcional
+            path = self._expect("STRING").value
+            return Insert(table=table, columns=cols, from_file=path)
+
         self._expect("KW", "VALUES")
 
         rows = []
@@ -570,7 +578,7 @@ class _Parser:
                 else:
                     return InList(ident=ident, items=[center, radius])
 
-            # Lista IN con un solo valor (se puede extender con más comas)
+            # Lista IN con un solo valor (o varios)
             items = [center]
             while self._accept("OP", ","):
                 items.append(self._parse_literal())
@@ -599,7 +607,7 @@ class _Parser:
         if t.kind == "KW" and t.value in {"TRUE", "FALSE", "NULL"}:
             self.i += 1
             return True if t.value == "TRUE" else (False if t.value == "FALSE" else None)
-        # permitimos identificadores como literales “strings” por sencillez del mini-dialecto
+        # permitimos identificadores como literales “strings”
         if t.kind in {"IDENT", "KW"}:
             self.i += 1
             return t.value
@@ -619,12 +627,9 @@ class _Parser:
             lit = self._parse_literal()
             where = {"op": op_tok.value, "left": ident, "right": lit}
         try:
-            # si tienes dataclass Delete:
             return Delete(table=table, where=where)
         except NameError:
-            # alternativa en dict si no existe la dataclass
             return {"kind": "delete", "table": table, "where": where}
-
 
 
 # ---------------------------
@@ -637,7 +642,6 @@ def parse_sql(sql: str):
     return ast
 
 class SQLParser:
-    """Wrapper simple si prefieres estilo de clase."""
     def parse(self, sql: str):
         return parse_sql(sql)
 
@@ -648,5 +652,4 @@ class SQLRunner:
     """
     def execute(self, sql: str):
         ast = parse_sql(sql)
-        # útil para serializar: lo dejo como lista de dicts
         return [asdict(s) for s in ast]

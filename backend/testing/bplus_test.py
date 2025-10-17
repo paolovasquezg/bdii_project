@@ -7,7 +7,7 @@ def main():
     table = "bp_varied"
     fields = [
         {"name": "id", "type": "i", "key": "primary"},            # indexes stored in main file
-        {"name": "name", "type": "s", "length": 16, "index": "b+"},  # b+ index on name (secondary)
+        {"name": "name", "type": "s", "length": 16, "index": "bplus"},  # b+ index on name (secondary)
         {"name": "value", "type": "i"}
     ]
 
@@ -65,7 +65,7 @@ def main():
 
     print("Search by indexed name 'alpha' ->", f.execute({"op": "search", "field": "name", "value": "alpha"}))
     print("Search by non-indexed value 200 ->", f.execute({"op": "search", "field": "value", "value": 200}))
-    print("Range search ids 2-7 ->", f.execute({"op": "range search", "field": "id", "min": 2, "max": 7}))
+    print("Range search ids 2-7 ->", f.execute({"op": "range_search", "field": "id", "min": 2, "max": 7}))
 
     print("Removing id=3 ->", f.execute({"op": "remove", "field": "id", "value": 3}))
     print("Search id=3 after delete ->", f.execute({"op": "search", "field": "id", "value": 3}))
@@ -74,7 +74,7 @@ def main():
     f.execute({"op": "insert", "record": {"id": 3, "name": "beta-new", "value": 777}})
     print("Search id=3 after re-insert ->", f.execute({"op": "search", "field": "id", "value": 3}))
 
-    final = f.execute({"op": "range search", "field": "id", "min": 20, "max": 35})
+    final = f.execute({"op": "range_search", "field": "id", "min": 20, "max": 35})
     print("Final ids:", [r["id"] for r in final])
 
     shutil.rmtree("files", ignore_errors=True)

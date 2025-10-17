@@ -162,7 +162,7 @@ Envoltorio **Uniform Result Envelope**:
     {
       "ok": true,
       "kind": "ddl | dml | error | query",
-      "action": "create_table | drop_table | create_index | insert | search | range search | knn | remove | ...",
+      "action": "create_table | drop_table | create_index | insert | search | range_search | knn | remove | ...",
       "count": 1,
       "data": [ { "id": 1, "name": "dup", "price": 99.0 } ],
       "meta": { "affected": 1 },
@@ -265,7 +265,7 @@ Cada test debe terminar con `exit code 0` en caso de PASS.
 * **`kind`**:
 
   * `ddl` → `create_table`, `drop_table`, `create_index`, `drop_index`, `create_table_from_file`.
-  * `dml` → `insert`, `remove`, `search`, `range search`, `knn`, etc.
+  * `dml` → `insert`, `remove`, `search`, `range_search`, `knn`, etc.
 * **`meta.affected`**:
 
   * `insert` y `remove` deben informar filas afectadas (`>=1`).

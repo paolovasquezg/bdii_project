@@ -21,6 +21,25 @@ def _norm_type(b: str) -> str:
     if b in ("date","datetime","timestamp"): return "date"
     return b or "varchar"
 
+def _norm_method(m: Any) -> str | None:
+    if m is None:
+        return None
+    s = str(m).strip().lower().replace(" ", "")
+    # equivalencias comunes
+    if s in {"b+", "bplus", "b+tree", "btree"}: return "bplus"
+    if s in {"r-tree", "rtree", "r+tree", "rtree"}: return "rtree"
+    if s in {"seq", "sequential"}: return "sequential"
+    if s in {"isam"}: return "isam"
+    if s in {"heap"}: return "heap"
+    if s in {"hash", "hashing"}: return "hash"
+    return s  # por si hay otros métodos válidos en tu backend
+
+def _is_between(node: Any) -> bool:
+    return isinstance(node, dict) and {"ident","lo","hi"} <= set(node.keys())
+
+def _is_eq(node: Any) -> bool:
+    return isinstance(node, dict) and node.get("op") in ("=","==") and {"left","right"} <= set(node.keys())
+
 class Planner:
     def plan(self, stmts: List[Stmt]) -> List[Dict[str, Any]]:
         plans: List[Dict[str, Any]] = []
@@ -28,47 +47,66 @@ class Planner:
             d = _asdict(s)
             k = _kind(d)
 
+            # ----------------- CREATE TABLE -----------------
             if k == "create_table":
                 fields = []
-                idx_tbl = {c: m for (c, m) in d.get("table_indexes", [])}
+                # índices a nivel de tabla: [(col, method)]
+                idx_tbl = {c: _norm_method(m) for (c, m) in d.get("table_indexes", [])}
+
                 for col in d["columns"]:
                     f = {"name": col["name"], "type": _norm_type(col["type"]["base"])}
                     if col["type"]["length"] is not None:
                         f["length"] = int(col["type"]["length"])
+
+                    # PK + posible USING
                     if col.get("primary_key"):
                         f["key"] = "primary"
                         if col.get("pk_using"):
-                            f["index"] = str(col["pk_using"])
+                            f["index"] = _norm_method(col["pk_using"])
+
+                    # índice inline en la columna
                     if col.get("inline_index") and "index" not in f:
-                        f["index"] = str(col["inline_index"])
+                        f["index"] = _norm_method(col["inline_index"])
+
+                    # índice definido a nivel de tabla
                     if col["name"] in idx_tbl and "index" not in f:
-                        f["index"] = str(idx_tbl[col["name"]])
+                        f["index"] = idx_tbl[col["name"]]
+
                     fields.append(f)
+
                 plans.append({"action": "create_table", "table": d["name"], "fields": fields})
 
+            # ----------------- CREATE INDEX -----------------
             elif k == "create_index":
                 plans.append({
                     "action": "create_index",
                     "table": d["table"],
                     "column": d["column"],
-                    "method": d.get("method") or "b+",
+                    "method": _norm_method(d.get("method") or "bplus"),
                     "if_not_exists": d.get("if_not_exists", False)
                 })
 
+            # --------- CREATE TABLE FROM FILE (opcional) ----------
             elif k == "create_table_from_file":
                 plans.append({
                     "action": "create_table_from_file",
                     "table": d["name"],
                     "path": d["path"],
                     "if_not_exists": d.get("if_not_exists", False),
-                    "index_method": d.get("index_method"),
+                    "index_method": _norm_method(d.get("index_method")),
                     "index_column": d.get("index_column")
                 })
 
+            # ----------------- INSERT -----------------
             elif k == "insert":
                 cols = d.get("columns")
 
-                # Normaliza a una lista de filas (rows)
+                # INSERT FROM FILE (si lo usas más arriba)
+                if d.get("from_file"):
+                    # No generamos plan especial aquí; tu executor ya soporta import desde CSV
+                    pass
+
+                # Normaliza a lista de filas
                 rows = []
                 if isinstance(d.get("rows"), list) and d["rows"]:
                     rows = [list(r) for r in d["rows"]]
@@ -77,9 +115,9 @@ class Planner:
                     if vals is None:
                         rows = []
                     elif isinstance(vals, list) and vals and isinstance(vals[0], (list, tuple)):
-                        rows = [list(v) for v in vals]   # lista de listas
+                        rows = [list(v) for v in vals]
                     else:
-                        rows = [vals]                    # una sola fila
+                        rows = [vals]
 
                 for row in rows:
                     if cols is None:
@@ -96,90 +134,96 @@ class Planner:
                             "record": {c: v for c, v in zip(cols, row)}
                         })
 
+            # ----------------- SELECT -----------------
             elif k == "select":
                 table = d["table"]
                 where = d.get("where")
-                cols = d.get("columns")  # None para '*', o lista de columnas
+                cols = d.get("columns")  # None => *
 
-                # Caso 1: sin WHERE -> usa scan (lo atenderá el executor en la acción 'select')
+                # sin WHERE -> select genérico
                 if where is None:
-                    plans.append({
-                        "action": "select",
-                        "table": table,
-                        "columns": cols,
-                        "where": None
-                    })
+                    plans.append({"action": "select", "table": table, "columns": cols, "where": None})
                     continue
 
-                # Caso 2: con WHERE -> conserva rutas aceleradas como ya tenías
-                # BETWEEN: {'ident','lo','hi'}
-                if isinstance(where, dict) and {"ident", "lo", "hi"} <= set(where.keys()):
-                    plans.append({
-                        "action": "range search",
-                        "table": table,
-                        "field": where["ident"],
-                        "min": where["lo"],
-                        "max": where["hi"]
-                    })
-
-                # Igualdad
-                elif isinstance(where, dict) and where.get("op") == "=":
-                    plans.append({
-                        "action": "search",
-                        "table": table,
-                        "field": where["left"],
-                        "value": where["right"]
-                    })
-
-                # IN lista: {'ident', 'items'}
-                elif isinstance(where, dict) and "ident" in where and "items" in where:
-                    plans.append({
-                        "action": "search_in",
-                        "table": table,
-                        "field": where["ident"],
-                        "items": where["items"]
-                    })
-
-                # GeoWithin: {'ident','center':{'kind':'point','x','y'}, 'radius'}
-                elif isinstance(where, dict) and "center" in where and "radius" in where and "ident" in where:
-                    center = where["center"]
-                    if isinstance(center, dict) and center.get("kind") == "point":
+                # WHERE como dict? (nuestro parser deja dataclasses->dict)
+                if isinstance(where, dict):
+                    # 1) BETWEEN
+                    if _is_between(where):
                         plans.append({
-                            "action": "geo_within",
+                            "action": "range_search",
                             "table": table,
                             "field": where["ident"],
-                            "center": {"x": center["x"], "y": center["y"]},
-                            "radius": where["radius"]
+                            "min": where["lo"],
+                            "max": where["hi"]
                         })
-                    else:
-                        raise NotImplementedError("GeoWithin requiere POINT(x,y) como centro")
 
-                # BETWEEN AND igualdad (AND con 2 items)
-                elif isinstance(where, dict) and where.get("op") == "AND" and len(where.get("items", [])) == 2:
-                    a, b = where["items"]
-                    if isinstance(a, dict) and {"ident", "lo", "hi"} <= set(a.keys()) and isinstance(b,
-                                                                                                     dict) and b.get(
-                            "op") == "=":
+                    # 2) Igualdad (= o ==)
+                    elif _is_eq(where):
                         plans.append({
-                            "action": "range search",
+                            "action": "search",
                             "table": table,
-                            "field": a["ident"],
-                            "min": a["lo"],
-                            "max": a["hi"],
-                            "post_filter": {"field": b["left"], "value": b["right"]}
+                            "field": where["left"],
+                            "value": where["right"]
                         })
+
+                    # 3) IN lista
+                    elif "ident" in where and "items" in where:
+                        plans.append({
+                            "action": "search_in",
+                            "table": table,
+                            "field": where["ident"],
+                            "items": where["items"]
+                        })
+
+                    # 4) GeoWithin (POINT, r)
+                    elif {"ident","center","radius"} <= set(where.keys()):
+                        center = where["center"]
+                        if isinstance(center, dict) and center.get("kind") == "point":
+                            plans.append({
+                                "action": "geo_within",
+                                "table": table,
+                                "field": where["ident"],
+                                "center": {"x": center["x"], "y": center["y"]},
+                                "radius": where["radius"]
+                            })
+                        else:
+                            # Si el centro no es POINT, dejamos que el executor filtre genérico
+                            plans.append({"action": "select", "table": table, "columns": cols, "where": where})
+
+                    # 5) AND entre (BETWEEN) y (=) en cualquier orden -> range + post_filter
+                    elif where.get("op") == "AND" and isinstance(where.get("items"), list) and len(where["items"]) == 2:
+                        a, b = where["items"]
+                        # normaliza orden
+                        left_between, right_eq = (a, b) if _is_between(a) and _is_eq(b) else ((b, a) if _is_between(b) and _is_eq(a) else (None, None))
+                        if left_between and right_eq:
+                            plans.append({
+                                "action": "range_search",
+                                "table": table,
+                                "field": left_between["ident"],
+                                "min": left_between["lo"],
+                                "max": left_between["hi"],
+                                "post_filter": {"field": right_eq["left"], "value": right_eq["right"]}
+                            })
+                        else:
+                            # AND general -> select y que el executor filtre
+                            plans.append({"action": "select", "table": table, "columns": cols, "where": where})
+
                     else:
-                        raise NotImplementedError("AND general no planificado")
+                        # Forma no optimizada: select genérico (el executor filtra)
+                        plans.append({"action": "select", "table": table, "columns": cols, "where": where})
 
                 else:
-                    raise NotImplementedError("WHERE no soportado")
+                    # WHERE no-dict (por si viniera raro) -> select genérico
+                    plans.append({"action": "select", "table": table, "columns": cols, "where": where})
 
+            # ----------------- DELETE -----------------
             elif k == "delete":
                 w = d.get("where") or {}
-                if w.get("op") != "=":
-                    raise NotImplementedError("DELETE soporta igualdad simple (WHERE id = x)")
+                if not (_is_eq(w)):
+                    raise NotImplementedError("DELETE soporta igualdad simple (WHERE col = valor)")
                 plans.append({"action": "remove", "table": d["table"], "field": w["left"], "value": w["right"]})
 
+            # ----------------- DROP -----------------
             elif k == "drop_table":
                 plans.append({"action": "drop_table", "table": d["name"], "if_exists": d.get("if_exists", False)})
 

@@ -7,6 +7,7 @@ from backend.storage.file import File
 from backend.catalog.catalog import table_meta_path, get_json
 from backend.core.utils import build_format
 from backend.core.record import Record
+from backend.storage.indexes.heap import HeapFile
 
 INTERNAL_FIELDS = {"deleted", "pos", "slot"}
 
@@ -39,6 +40,23 @@ def _safe_plan(obj):
     except Exception:
         return str(obj)
 
+# --- helper: detectar nombre de PK de una tabla ---
+def _detect_pk_name(table: str) -> str | None:
+    try:
+        meta = table_meta_path(table)
+        relation, _ = get_json(str(meta), 2)
+        if isinstance(relation, dict):
+            for col, spec in relation.items():
+                if isinstance(spec, dict) and (spec.get("key") == "primary"):
+                    return col
+        else:
+            for spec in (relation or []):
+                if isinstance(spec, dict) and (spec.get("key") == "primary"):
+                    return spec.get("name")
+    except Exception:
+        pass
+    return None
+
 # --- Fallback: heap-scan geo dentro de un radio ---
 def _heap_geo_scan(table, field, center, radius):
     meta = table_meta_path(table)
@@ -48,7 +66,7 @@ def _heap_geo_scan(table, field, center, radius):
         return []
     heap_file = pidx["filename"]
     with open(heap_file, "rb") as hf:
-        slen = struct.unpack("I", hf.read(4))[0]
+        slen = struct.unpack("<I", hf.read(4))[0]
         schema = _json.loads(hf.read(slen).decode("utf-8"))
         fmt = build_format(schema)
         rec_size = struct.calcsize(fmt)
@@ -92,7 +110,7 @@ def _kind_for(action: str) -> str:
     if action in ("create_table", "drop_table", "create_index", "drop_index", "create_table_from_file"):
         return "ddl"
     # DML (incluye consultas/selects)
-    if action in ("insert", "remove", "search", "range search", "knn", "search_in", "geo_within", "select"):
+    if action in ("insert", "remove", "search", "range_search", "knn", "search_in", "geo_within", "select"):
         return "dml"
     return "query"
 
@@ -153,7 +171,7 @@ def _msg_for(action: str, *, count: int | None = None, affected: int | None = No
     if action == "insert": return f"Insertadas {_fmt_rows(int(affected or 0))}."
     if action == "remove": return f"Eliminadas {_fmt_rows(int(affected or 0))}."
     if action in ("search", "select"): return f"Encontradas {_fmt_rows(int(count or 0))}."
-    if action == "range search": return f"Encontradas {_fmt_rows(int(count or 0))} (rango)."
+    if action == "range_search": return f"Encontradas {_fmt_rows(int(count or 0))} (rango)."
     if action == "geo_within": return f"Encontradas {_fmt_rows(int(count or 0))} (geo)."
     if action == "knn": return f"Encontrados {_fmt_vecinos(int(count or 0))} (kNN)."
     return ""
@@ -207,7 +225,7 @@ class Executor:
                                              t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
                 elif action == "create_index":
-                    create_index(p["table"], p["column"], method=p.get("method") or "b+")
+                    create_index(p["table"], p["column"], method=p.get("method") or "bplus")
                     results.append(ok_result(action, table, message="Índice creado.",
                                              meta={"io": ZERO_IO(), "index_usage": []},
                                              t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
@@ -216,7 +234,6 @@ class Executor:
                     table = p["table"]; path = p["path"]
                     F = File(table)
 
-                    # detecto PK para ruta ISAM especial
                     prim = (F.indexes or {}).get("primary", {})
                     pk_kind = (prim.get("index") or "").lower()
 
@@ -230,14 +247,12 @@ class Executor:
                                 for col, spec in F.relation.items():
                                     v = row.get(col)
                                     t = str(spec.get("type") or "").lower()
-
                                     if isinstance(v, str) and v.startswith("[") and v.endswith("]"):
                                         try:
                                             import json
                                             v = json.loads(v)
                                         except Exception:
                                             pass
-
                                     if v == "" or v is None:
                                         v = None
                                     elif t in ("int", "i"):
@@ -275,7 +290,7 @@ class Executor:
                                              t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
                 # ------------------------------- DML ------------------------------- #
-                elif action in ("insert","remove","search","range search","knn","search_in","geo_within","select"):
+                elif action in ("insert","remove","search","range_search","knn","search_in","geo_within","select"):
                     F = File(table)
 
                     if action == "search_in":
@@ -286,11 +301,11 @@ class Executor:
                             rr = F.execute({"op": "search", "field": field, "value": v})
                             if isinstance(rr, list):
                                 acc.extend(rr)
-                        # dedup opcional por "id"
+                        pk_name = _detect_pk_name(table)
                         seen = set(); merged = []
                         for r in acc:
-                            if isinstance(r, dict):
-                                k = r.get("id", None)
+                            if isinstance(r, dict) and pk_name:
+                                k = r.get(pk_name, None)
                                 if k is not None:
                                     if k in seen: continue
                                     seen.add(k)
@@ -313,7 +328,6 @@ class Executor:
                         F.io_reset(); F.index_reset()
                         rows = None
 
-                        # 1) RTREE círculo nativo
                         try:
                             r1 = F.execute({"op": "rtree_within_circle", "field": field,
                                             "center": center, "radius": radius})
@@ -321,7 +335,6 @@ class Executor:
                         except Exception:
                             rows = None
 
-                        # 2) RTREE bbox + refine si no hubo resultados
                         if not rows:
                             try:
                                 rect = _bbox(center, radius)
@@ -348,7 +361,6 @@ class Executor:
                             except Exception:
                                 rows = rows or None
 
-                        # 3) Si aún nada, intentar op genérica (si tu File la implementa)
                         if not rows:
                             try:
                                 r3 = F.execute({"op": "geo_within", "field": field,
@@ -357,7 +369,6 @@ class Executor:
                             except Exception:
                                 rows = None
 
-                        # 4) Último recurso: heap-scan
                         if not rows:
                             try:
                                 rows = _heap_geo_scan(table, field, center, radius) or []
@@ -372,47 +383,73 @@ class Executor:
                                                  t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
                     elif action == "insert":
+                        # ---- NUEVO: INSERT INTO t FROM FILE 'path' ----
+                        if p.get("from_file"):
+                            path = p.get("from_file")
+                            F.io_reset(); F.index_reset()
+                            res = F.execute({"op": "import_csv", "path": path}) or {}
+                            affected = int(res.get("count", 0)) if isinstance(res, dict) else 0
+                            io = F.io_get(); idx = F.index_get()
+                            results.append(ok_result("insert", table,
+                                                     meta={"affected": affected, "io": io, "index_usage": idx},
+                                                     message=_msg_for("insert", affected=affected),
+                                                     t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                            continue  # pasa al siguiente plan
+
+                        # ---- INSERT de una fila ----
                         rec = p.get("record")
                         if p.get("record_is_positional"):
                             meta = table_meta_path(table)
                             relation, _ = get_json(str(meta), 2)
                             order = [f["name"] for f in relation] if isinstance(relation, list) else list(relation.keys())
                             rec = dict(zip(order, rec))
+
+                        pk_name = _detect_pk_name(table)
+
                         F.io_reset(); F.index_reset()
-                        res = F.execute({"op": "insert", "record": rec})
-                        affected = 1
-                        if isinstance(res, dict) and "affected" in res:
-                            affected = int(res["affected"])
-                        elif isinstance(res, list):
-                            affected = len(res)
-                        io = F.io_get(); idx = F.index_get()
-                        if affected == 0:
-                            # Intentar identificar la PK para mensaje más claro
+                        try:
+                            res = F.execute({"op": "insert", "record": rec})
+                            affected = 0
+                            if isinstance(res, dict) and "affected" in res:
+                                affected = int(res["affected"])
+                            elif isinstance(res, list):
+                                affected = len(res)
+                            else:
+                                affected = 1
+
+                            io = F.io_get(); idx = F.index_get()
+                            if affected <= 0:
+                                msg = f"PK duplicada ({pk_name}={rec.get(pk_name)})" if pk_name else "PK duplicada"
+                                results.append(err_result(action, code="DUPLICATE_KEY", message=msg,
+                                                          detail={"plan": p}, plan=plan_safe,
+                                                          t_ms=(perf_counter()-t0)*1000))
+                                overall_ok = False
+                            else:
+                                results.append(ok_result(action, table,
+                                                         meta={"affected": affected, "io": io, "index_usage": idx},
+                                                         message=_msg_for("insert", affected=affected),
+                                                         t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                        except Exception as ex:
+                            dup_confirmed = False
                             try:
-                                meta = table_meta_path(table)
-                                relation, _ = get_json(str(meta), 2)
-                                pk_name = None
-                                if isinstance(relation, dict):
-                                    for col, spec in relation.items():
-                                        if isinstance(spec, dict) and (spec.get("key") == "primary"):
-                                            pk_name = col; break
-                                else:
-                                    for spec in (relation or []):
-                                        if isinstance(spec, dict) and (spec.get("key") == "primary"):
-                                            pk_name = spec.get("name"); break
-                                pk_val = rec.get(pk_name) if (pk_name and isinstance(rec, dict)) else None
-                                msg = f"PK duplicada ({pk_name}={pk_val})" if pk_name else "PK duplicada"
+                                if pk_name and isinstance(rec, dict) and pk_name in rec:
+                                    F.io_reset(); F.index_reset()
+                                    already = F.execute({"op": "search", "field": pk_name, "value": rec[pk_name]}) or []
+                                    if isinstance(already, list) and len(already) >= 1:
+                                        dup_confirmed = True
+                                        msg = f"PK duplicada ({pk_name}={rec.get(pk_name)})"
+                                        results.append(err_result(action, code="DUPLICATE_KEY", message=msg,
+                                                                  detail={"plan": p}, plan=plan_safe,
+                                                                  t_ms=(perf_counter()-t0)*1000))
+                                        overall_ok = False
                             except Exception:
-                                msg = "PK duplicada"
-                            results.append(err_result(action, code="DUPLICATE_KEY", message=msg,
-                                                      detail={"plan": p}, plan=plan_safe,
-                                                      t_ms=(perf_counter()-t0)*1000))
-                            overall_ok = False
-                        else:
-                            results.append(ok_result(action, table,
-                                                     meta={"affected": affected, "io": io, "index_usage": idx},
-                                                     message=_msg_for("insert", affected=affected),
-                                                     t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                                pass
+
+                            if not dup_confirmed:
+                                results.append(err_result(action, "EXEC_ERROR", str(ex),
+                                                          detail={"plan": p}, plan=plan_safe,
+                                                          t_ms=(perf_counter()-t0)*1000))
+                                overall_ok = False
 
                     elif action == "remove":
                         F.io_reset(); F.index_reset()
@@ -428,18 +465,31 @@ class Executor:
 
                     elif action == "select":
                         F.io_reset(); F.index_reset()
-                        rows = F.execute({"op": "scan"}) or []
-                        where = p.get("where")
-                        if where:
-                            rows = [r for r in rows if isinstance(r, dict) and _eval_where(where, r)]
+                        where = p.get("where") or {}
                         cols = p.get("columns")
-                        projected = [_project_row(r, cols) for r in rows if isinstance(r, dict)]
-                        data, cnt = _sanitize_rows(projected)
-                        io = F.io_get(); idx = F.index_get()
-                        results.append(ok_result(action, table, data=data,
-                                                 meta={"io": io, "index_usage": idx},
-                                                 message=_msg_for("select", count=cnt),
-                                                 t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+
+                        def _emit_ok(rows):
+                            projected = [_project_row(r, cols) for r in rows if isinstance(r, dict)]
+                            data, cnt = _sanitize_rows(projected)
+                            io = F.io_get(); idx = F.index_get()
+                            results.append(ok_result("select", table, data=data,
+                                                     meta={"io": io, "index_usage": idx},
+                                                     message=_msg_for("select", count=cnt),
+                                                     t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+
+                        if {"left","op","right"} <= set(where.keys()) and where.get("op") in ("=","=="):
+                            rows = F.execute({"op":"search", "field": where["left"], "value": where["right"]}) or []
+                            _emit_ok(rows)
+                        elif {"ident","lo","hi"} <= set(where.keys()):
+                            rows = F.execute({"op":"range_search", "field": where["ident"],
+                                              "min": where["lo"], "max": where["hi"]}) or []
+                            _emit_ok(rows)
+                        else:
+                            results.append(err_result("select", "UNSUPPORTED_SELECT",
+                                                      "Forma de SELECT no soportada (usa search/range).",
+                                                      detail={"plan": p}, plan=plan_safe,
+                                                      t_ms=(perf_counter()-t0)*1000))
+                            overall_ok = False
 
                     else:
                         # search / range search / knn “directos”
