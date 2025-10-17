@@ -34,7 +34,9 @@ for i in range(1, 61):
 
 #run_sql("SELECT * FROM products WHERE price = 50;")
 
-run_sql("SELECT * FROM products WHERE name = 'mouse';")
+#run_sql("SELECT * FROM products WHERE name = 'mouse';")
+
+run_sql("SELECT * FROM products;")
 
 #run_sql("SELECT * FROM products WHERE product_id = 2")
 

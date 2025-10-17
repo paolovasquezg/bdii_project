@@ -50,8 +50,8 @@ def _short_usage(meta: dict) -> str:
     if idx:
         parts = []
         for u in idx:
-            where = u.get("where")
-            ind = u.get("index")
+            where = u.get("where") or u.get("kind")
+            ind = u.get("index") or u.get("method")
             field = u.get("field")
             op = u.get("op")
             if where and ind and field:
@@ -99,7 +99,7 @@ def _used_index(meta: dict, where: str, index_kind: str, field: str) -> bool:
     """True si meta.index_usage contiene una entrada que coincide con where/index/field."""
     idx = (meta or {}).get("index_usage") or []
     for u in idx:
-        if u.get("where") == where and u.get("index") == index_kind and u.get("field") == field:
+        if (u.get("where") or u.get("kind")) == where and (u.get("index") or u.get("method")) == index_kind and u.get("field") == field:
             return True
     return False
 
@@ -218,16 +218,30 @@ def verify_queries(tbl: str):
         res0 = assert_ok(env, msg="price between")
         rows = res0.get("data") or []
         meta = res0.get("meta") or {}
+        # Expectation derived from the same CSV the test inserts
+        exp_ids = []
+        try:
+            ensure_products_csv(CSV)
+            with open(CSV, newline="", encoding="utf-8") as _f:
+                _r = csv.DictReader(_f)
+                for _row in _r:
+                    pr = float(_row["price"])
+                    if 10 <= pr <= 26:
+                        exp_ids.append(int(_row["product_id"]))
+        except Exception:
+            pass
+        exp_ids = sorted(exp_ids)
+
         if not _used_index(meta, "secondary", "bplus", "price"):
             _print_step_bad("SELECT price BETWEEN 10..26", env, "no usó secondary:bplus(price)")
             failures.append("SELECT price BETWEEN 10..26: índice no usado")
         else:
             ids = sorted(int(x["product_id"]) for x in rows)
-            if ids == [1,3,4]:
+            if ids == exp_ids:
                 _print_step_ok("SELECT price BETWEEN 10..26", res0)
                 print(f"     └─ {_rows_info(rows)}")
             else:
-                _print_step_bad("SELECT price BETWEEN 10..26", env, f"esperado ids [1,3,4], got {ids}")
+                _print_step_bad("SELECT price BETWEEN 10..26", env, f"esperado ids {exp_ids}, got {ids}")
                 failures.append("SELECT price BETWEEN 10..26: contenido incorrecto")
     except AssertionError as e:
         _print_step_bad("SELECT price BETWEEN 10..26", env, f"envelope/result NOT ok: {e}")

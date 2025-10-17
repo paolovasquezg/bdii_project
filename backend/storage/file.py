@@ -770,16 +770,24 @@ class File:
         if mainindx == "heap":
             GetFile = HeapFile(mainfilename)
             records = GetFile.get_all(False)
+            self.io_merge(GetFile, "heap")
         elif mainindx == "sequential":
             GetFile = SeqFile(mainfilename)
             records = GetFile.get_all()
+            self.io_merge(GetFile, "sequential")
         elif mainindx == "isam":
             GetFile = IsamFile(mainfilename)
             records = GetFile.get_all()
-        else:
+            self.io_merge(GetFile, "isam")
+        elif mainindx == "bplus":
             GetFile = BPlusFile(mainfilename)
             records = GetFile.get_all()
-        
+            self.io_merge(GetFile, "bplus")
+        else:
+            records = []
+
+        self.last_io = self.io_get()
+
         return records
 
     # ----------------------------------- execute ------------------------------------ #

@@ -142,7 +142,11 @@ class Planner:
 
                 # sin WHERE -> select genérico
                 if where is None:
-                    plans.append({"action": "select", "table": table, "columns": cols, "where": None})
+                    plans.append({
+                        "action": "select",
+                        "table": table,
+                        "columns": cols,
+                        "where": None})
                     continue
 
                 # WHERE como dict? (nuestro parser deja dataclasses->dict)

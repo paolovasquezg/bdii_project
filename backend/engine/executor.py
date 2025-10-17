@@ -465,7 +465,7 @@ class Executor:
 
                     elif action == "select":
                         F.io_reset(); F.index_reset()
-                        where = p.get("where") or {}
+                        where = p.get("where")
                         cols = p.get("columns")
 
                         def _emit_ok(rows):
@@ -477,7 +477,10 @@ class Executor:
                                                      message=_msg_for("select", count=cnt),
                                                      t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
-                        if {"left","op","right"} <= set(where.keys()) and where.get("op") in ("=","=="):
+                        if where is None:
+                            rows = F.execute({"op": "get_all"}) or []
+                            _emit_ok(rows)
+                        elif {"left","op","right"} <= set(where.keys()) and where.get("op") in ("=","=="):
                             rows = F.execute({"op":"search", "field": where["left"], "value": where["right"]}) or []
                             _emit_ok(rows)
                         elif {"ident","lo","hi"} <= set(where.keys()):
