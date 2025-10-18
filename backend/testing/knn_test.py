@@ -48,6 +48,9 @@ rows = [
 for pid, name, xy in rows:
     run_sql(f"INSERT INTO pk_switch_rtree (id, name, coords) VALUES ({pid}, '{name}', '{xy}')")
 
+run_sql(f"INSERT INTO pk_switch_rtree VALUES (21, 'o6', '50,4'),(22, 'o7', '21,3')")
+
+
 run_sql(
     '''
     SELECT id, name, coords

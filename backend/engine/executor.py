@@ -283,12 +283,14 @@ class Executor:
         results = []
         overall_ok = True
         t0_all = perf_counter()
+        elapsed_ms = 0.0
 
         for p in plans:
             action = p["action"]; table = p.get("table")
             plan_safe = _safe_plan(p)
             try:
                 t0 = perf_counter()
+                before_len = len(results)
 
                 # ------------------------------- DDL ------------------------------- #
                 if action == "create_table":
@@ -635,6 +637,14 @@ class Executor:
                 results.append(err_result(action, "EXEC_ERROR", str(ex),
                                           detail={"plan": p}, plan=plan_safe, t_ms=(perf_counter()-t0)*1000))
                 overall_ok = False
+
+            try:
+                dt = (perf_counter() - t0) * 1000.0
+                if len(results) > before_len:
+                    results[-1]["meta"]["time_ms"] = elapsed_ms + dt
+                    elapsed_ms += dt
+            except Exception:
+                pass
 
         total_ms = (perf_counter() - t0_all) * 1000.0
         return {
