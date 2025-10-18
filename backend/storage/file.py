@@ -790,7 +790,7 @@ class File:
     
         if mainindx == "heap":
             GetFile = HeapFile(mainfilename)
-            records = GetFile.get_all(False)
+            records = GetFile.get_all(True)
             self.io_merge(GetFile, "heap")
         elif mainindx == "sequential":
             GetFile = SeqFile(mainfilename)

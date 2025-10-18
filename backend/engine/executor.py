@@ -2,6 +2,8 @@ from typing import Any, Dict, List
 from time import perf_counter
 import json as _json
 import struct
+import csv as _csv
+import os
 from backend.catalog.ddl import create_table, create_index, drop_table, drop_index
 from backend.storage.file import File
 from backend.catalog.catalog import table_meta_path, get_json
@@ -130,6 +132,77 @@ def _as_point(v):
         except Exception: pass
     return None
 
+def _infer_type(values):
+    """Inferencia simple: int > float > bool > varchar."""
+    saw_float = saw_int = saw_bool = False
+    for v in values:
+        if v is None or str(v).strip() == "":
+            continue
+        s = str(v).strip()
+        sl = s.lower()
+        if sl in ("true", "false"):
+            saw_bool = True
+            continue
+        try:
+            int(s)
+            saw_int = True
+            continue
+        except Exception:
+            pass
+        try:
+            float(s)
+            saw_float = True
+            continue
+        except Exception:
+            pass
+        # Cualquier otra cosa = varchar
+        return "varchar"
+    if saw_float: return "float"
+    if saw_int:   return "int"
+    if saw_bool:  return "bool"
+    return "varchar"
+
+
+def _infer_fields_from_csv(path, index_column=None, index_method=None, sample_rows=200):
+    with open(path, newline="", encoding="utf-8") as f:
+        r = _csv.DictReader(f)
+        headers = r.fieldnames or []
+        buckets = {h: [] for h in headers}
+        for i, row in enumerate(r):
+            for h in headers:
+                buckets[h].append(row.get(h))
+            if i + 1 >= sample_rows:
+                break
+
+    fields = []
+    for h in headers:
+        t = _infer_type(buckets[h])
+
+        fdef = {"name": h, "type": t}
+
+        # >>> CLAVE DEL FIX: dar tamaño a varchar <<<
+        if t == "varchar":
+            # longitud observada (muestral) con margen de seguridad
+            try:
+                maxlen = max((len(str(v)) for v in buckets[h] if v is not None), default=0)
+            except Exception:
+                maxlen = 0
+            # límites razonables: al menos 8, tope 255 (ajústalo si tu motor permite más)
+            size = max(8, min(maxlen or 32, 255))
+            # guarda ambos por compatibilidad
+            fdef["length"] = size
+            fdef["size"] = size
+
+        # PK si corresponde
+        if index_column and str(index_column) == h:
+            fdef["key"] = "primary"
+            if index_method:
+                fdef["index"] = index_method
+
+        fields.append(fdef)
+
+    return fields
+
 def _eval_where(where, row):
     if not where: return True
     if "items" in where and "left" not in where:
@@ -231,17 +304,45 @@ class Executor:
                                              t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
 
                 elif action == "create_table_from_file":
-                    table = p["table"]; path = p["path"]
+                    table = p["table"]
+                    path = p["path"]
+                    idx_method = (p.get("index_method") or None)
+                    idx_column = p.get("index_column")
+
+                    meta_path = table_meta_path(table)
+                    exists = False
+                    try:
+                        # si el json de metadatos existe, la tabla existe
+                        _ = get_json(str(meta_path), 2)
+                        exists = True
+                    except Exception:
+                        exists = False
+
+                    # Si ya existe y NO es IF NOT EXISTS -> error (semántica de CREATE TABLE)
+                    #if exists and not p.get("if_not_exists", False):
+                    #    results.append(err_result(action, "TABLE_EXISTS",
+                    #                              f"La tabla '{table}' ya existe.",
+                    #                              detail={"plan": p},
+                    #                              plan=plan_safe, t_ms=(perf_counter() - t0) * 1000))
+                    #    overall_ok = False
+                    #    continue
+
+                    # Si NO existe, la creamos infiriendo el esquema del CSV
+                    if not exists:
+                        fields = _infer_fields_from_csv(path, index_column=idx_column, index_method=idx_method)
+                        create_table(table, fields)
+
+                    # Importamos/Construimos según el tipo de PK
                     F = File(table)
 
                     prim = (F.indexes or {}).get("primary", {})
                     pk_kind = (prim.get("index") or "").lower()
 
                     if pk_kind == "isam":
-                        import csv, json as _json
+                        # build ISAM en una sola pasada
                         recs = []
                         with open(path, newline="", encoding="utf-8") as f:
-                            r = csv.DictReader(f)
+                            r = _csv.DictReader(f)
                             for row in r:
                                 rec = {}
                                 for col, spec in F.relation.items():
@@ -263,19 +364,24 @@ class Executor:
                                         v = str(v).strip().lower() in ("1", "true", "t", "yes", "y")
                                     rec[col] = v
                                 recs.append(rec)
-                        F.io_reset(); F.index_reset()
+                        F.io_reset()
+                        F.index_reset()
                         F.execute({"op": "build", "records": recs})
-                        io = F.io_get(); idx = F.index_get()
+                        io = F.io_get()
+                        idx = F.index_get()
                         results.append(ok_result(action, table, meta={"io": io, "index_usage": idx},
-                                                message="Tabla creada desde CSV (ISAM).",
-                                                t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                                                 message="Tabla creada desde CSV (ISAM).",
+                                                 t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
                     else:
-                        F.io_reset(); F.index_reset()
+                        # heap / sequential / bplus / hash: import CSV
+                        F.io_reset()
+                        F.index_reset()
                         F.execute({"op": "import_csv", "path": path})
-                        io = F.io_get(); idx = F.index_get()
+                        io = F.io_get()
+                        idx = F.index_get()
                         results.append(ok_result(action, table, meta={"io": io, "index_usage": idx},
-                                                message="Tabla creada desde CSV.",
-                                                t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                                                 message="Tabla creada desde CSV.",
+                                                 t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
 
                 elif action == "drop_table":
                     drop_table(table)
@@ -462,53 +568,63 @@ class Executor:
                                                  message=_msg_for("remove", affected=affected),
                                                  t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
 
+
                     elif action == "select":
-                        F.io_reset(); F.index_reset()
+                        F.io_reset()
+                        F.index_reset()
                         where = p.get("where")
                         cols = p.get("columns")
 
                         def _emit_ok(rows):
-                            projected = [_project_row(r, cols) for r in rows if isinstance(r, dict)]
+                            normalized = []
+                            for r in rows or []:
+                                if isinstance(r, tuple) and len(r) >= 1:
+                                    normalized.append(r[0])
+                                elif isinstance(r, dict):
+                                    normalized.append(r)
+                            projected = [_project_row(r, cols) for r in normalized if isinstance(r, dict)]
                             data, cnt = _sanitize_rows(projected)
-                            io = F.io_get(); idx = F.index_get()
+                            io = F.io_get()
+                            idx = F.index_get()
                             results.append(ok_result("select", table, data=data,
                                                      meta={"io": io, "index_usage": idx},
                                                      message=_msg_for("select", count=cnt),
-                                                     t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
+                                                     t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
 
                         if where is None:
                             rows = F.execute({"op": "get_all"}) or []
                             _emit_ok(rows)
-                        elif {"left","op","right"} <= set(where.keys()) and where.get("op") in ("=","=="):
-                            rows = F.execute({"op":"search", "field": where["left"], "value": where["right"]}) or []
+                        elif {"left", "op", "right"} <= set(where.keys()) and where.get("op") in ("=", "=="):
+                            rows = F.execute({"op": "search", "field": where["left"], "value": where["right"]}) or []
                             _emit_ok(rows)
-                        elif {"ident","lo","hi"} <= set(where.keys()):
-                            rows = F.execute({"op":"range_search", "field": where["ident"],
+                        elif {"ident", "lo", "hi"} <= set(where.keys()):
+                            rows = F.execute({"op": "range_search", "field": where["ident"],
                                               "min": where["lo"], "max": where["hi"]}) or []
                             _emit_ok(rows)
                         else:
                             results.append(err_result("select", "UNSUPPORTED_SELECT",
                                                       "Forma de SELECT no soportada (usa search/range).",
                                                       detail={"plan": p}, plan=plan_safe,
-                                                      t_ms=(perf_counter()-t0)*1000))
+                                                      t_ms=(perf_counter() - t0) * 1000))
                             overall_ok = False
 
                     else:
                         # search / range search / knn “directos”
                         payload = {k: v for k, v in p.items() if k not in ("action", "table", "post_filter")}
                         payload["op"] = action
-                        F.io_reset(); F.index_reset()
+                        F.io_reset()
+                        F.index_reset()
                         rows = F.execute(payload) or []
                         pf = p.get("post_filter")
                         if pf and isinstance(rows, list):
                             rows = [r for r in rows if isinstance(r, dict) and r.get(pf["field"]) == pf["value"]]
                         data, cnt = _sanitize_rows(rows)
-                        io = F.io_get(); idx = F.index_get()
+                        io = F.io_get();
+                        idx = F.index_get()
                         results.append(ok_result(action, table, data=data,
                                                  meta={"io": io, "index_usage": idx},
                                                  message=_msg_for(action, count=cnt),
-                                                 t_ms=(perf_counter()-t0)*1000, plan=plan_safe))
-
+                                                 t_ms=(perf_counter() - t0) * 1000, plan=plan_safe))
                 else:
                     results.append(err_result(action, "UNSUPPORTED_ACTION",
                                               f"Acción no soportada: {action}",

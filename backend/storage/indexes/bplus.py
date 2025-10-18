@@ -185,7 +185,6 @@ class BPlusFile:
                 if node.is_leaf:
                     return page, node
 
-                # ⚠️ Si por algún bug el interno no tiene hijos, trátalo como hoja
                 if not node.children:
                     return page, node
 
@@ -195,7 +194,7 @@ class BPlusFile:
 
                 page = node.children[i] if i < len(node.children) else node.children[-1]
                 steps += 1
-                if steps > total + 1:  # Guardia para evitar loop silencioso
+                if steps > total + 1:
                     raise RuntimeError("BPlus: _find_leaf_page se loopéo; revisar estructura del árbol")
 
     def insert(self, record: dict, additional: dict):
