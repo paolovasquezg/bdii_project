@@ -221,7 +221,7 @@ class File:
                         in_rec = ({"pos": rec.get("pos"), index: rec[index], "deleted": False}
                                   if self.indexes["primary"]["index"] == "heap"
                                   else {"pk": rec[self.primary_key], index: rec[index], "deleted": False})
-                        h.insert(in_rec, key_name=index)
+                        h.insert(in_rec, index)
                     self.io_merge(h, "hash")
                     self.index_log("secondary", "hash", index, "build")
                 except Exception as e:
@@ -357,13 +357,13 @@ class File:
                         if is_heap:
                             for row_dict, pos in records:
                                 if index not in row_dict: continue
-                                rec = {"pos": pos, index: row_dict[index], "deleted": False}
-                                h.insert(rec, key_name=index)
+                                rec = {index: row_dict[index], "pos": pos, "deleted": False}
+                                h.insert(rec, index)
                         else:
                             for row_dict in records:
                                 if index not in row_dict: continue
-                                rec = {"pk": row_dict[self.primary_key], index: row_dict[index], "deleted": False}
-                                h.insert(rec, key_name=index)
+                                rec = {index: row_dict[index], "pk": row_dict[self.primary_key], "deleted": False}
+                                h.insert(rec, index)
                         self.io_merge(h, "hash")
                         self.index_log("secondary", "hash", index, "insert")
                     except Exception as e:
@@ -470,7 +470,7 @@ class File:
             if kind == "hash":
                 try:
                     h = ExtendibleHashingFile(filename)
-                    records = h.find(value, key_name=field)
+                    records = h.find(value, field)
                     self.io_merge(h, "hash")
                     self.index_log("secondary", "hash", field, "search")
                 except Exception as e:
@@ -730,10 +730,10 @@ class File:
                         if isinstance(rec, tuple) and len(rec) >= 2:
                             row = rec[0]
                             if index in row:
-                                try: h.remove(row[index], key_name=index)
+                                try: h.remove(row[index], index)
                                 except Exception: pass
                         elif isinstance(rec, dict) and index in rec:
-                            try: h.remove(rec[index], key_name=index)
+                            try: h.remove(rec[index], index)
                             except Exception: pass
                     self.io_merge(h, "hash")
                     self.index_log("secondary", "hash", index, "cleanup_after_remove")

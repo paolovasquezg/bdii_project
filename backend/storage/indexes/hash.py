@@ -8,6 +8,7 @@ BUCKET_SIZE = 3
 HEADER_FORMAT = 'ii'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 INITIAL_MAX_CHAIN = 2
+MAX_GLOBAL_DEPTH = 20
 
 # ================== Bucket ==================
 class Bucket:
@@ -161,9 +162,21 @@ class ExtendibleHashingFile:
         with open(self.filename, 'rb') as f:
             offset = self._get_page_offset(page_idx)
             f.seek(offset)
-            local_depth = struct.unpack('i', f.read(4))[0]
-            overflow_page = struct.unpack('i', f.read(4))[0]
+        
+            depth_bytes = f.read(4)
+            if len(depth_bytes) < 4:
+                return Bucket(local_depth=1, overflow_page=-1)
+            local_depth = struct.unpack('i', depth_bytes)[0]
+            
+            overflow_bytes = f.read(4)
+            if len(overflow_bytes) < 4:
+                return Bucket(local_depth=1, overflow_page=-1)
+            overflow_page = struct.unpack('i', overflow_bytes)[0]
+            
             data = f.read(self.bucket_disk_size)
+            if len(data) < self.bucket_disk_size:
+                data = data + b'\x00' * (self.bucket_disk_size - len(data))
+            
             self.read_count += 1
             return Bucket.unpack(data, local_depth, overflow_page,
                                  self.record_size, self.format, self.schema)
@@ -194,7 +207,7 @@ class ExtendibleHashingFile:
             cur = b.overflow_page
         return chain
 
-    def find(self, key_value, key_name="id"):
+    def find(self, key_value, key_name):
         if self.key_name is None:
             self.key_name = key_name
         dir_idx = self._get_bucket_idx(key_value)
@@ -221,7 +234,7 @@ class ExtendibleHashingFile:
                     pass
         return zeros, ones
 
-    def insert(self, record_data, key_name="id"):
+    def insert(self, record_data, key_name):
         if self.key_name is None:
             self.key_name = key_name
 
@@ -255,12 +268,16 @@ class ExtendibleHashingFile:
             self._write_directory()
             return record_data
 
-        # 3) si se alcanzó el máximo de la cadena -> intentar split
+        # 3) si se alcanzó el máximo de la cadena -> intentar split o rehashing
         head_bucket = chain[0][1]
         old_local = head_bucket.local_depth
-        zeros, ones = self._chain_bit_counts(chain, old_local)
-        splittable = (zeros > 0 and ones > 0)
-
+        
+        # Si local_depth == global_depth y cadena al máximo -> REHASHING COMPLETO
+        if old_local == self.global_depth:
+            self._rehash_and_insert(record_data)
+            return record_data
+        
+        # Si no, hacer split normal
         self._split(dir_idx, page_idx, chain)
 
         dir_idx = self._get_bucket_idx(key_value)
@@ -273,7 +290,7 @@ class ExtendibleHashingFile:
                 self._write_bucket(curr_page, curr_bucket)
                 return record_data
 
-        # 4) fallback: si el split no ayudó
+        # 4) fallback: si el split no ayudó, crear overflow
         last_page, last_bucket = new_chain[-1]
         new_overflow_page = self.next_page_idx
         self.next_page_idx += 1
@@ -328,7 +345,65 @@ class ExtendibleHashingFile:
         self._write_directory()
 
         for rec in old_records:
-            self.insert(rec.fields)
+            self.insert(rec.fields, self.key_name)
+
+    def _rehash_and_insert(self, new_record_data):
+        all_records = self.get_all_records()
+        all_records.append(new_record_data)
+        
+        # 2. Incrementar global_depth
+        old_dir_size = len(self.directory)
+        self.global_depth += 1
+        new_dir_size = 1 << self.global_depth
+        
+        # 3. Crear nuevo directorio y resetear estado
+        self.directory = list(range(new_dir_size))
+        self.next_page_idx = new_dir_size
+        
+        # 4. Reescribir el archivo completamente
+        with open(self.filename, 'r+b') as f:
+            # Escribir header
+            off = self._json_offset()
+            f.seek(off)
+            f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
+            
+            # Escribir directorio (ahora es más grande, sin padding)
+            f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
+            
+            # Inicializar todos los buckets vacíos
+            for page_idx in range(new_dir_size):
+                empty_bucket = Bucket(local_depth=self.global_depth, overflow_page=-1)
+                offset = self._get_page_offset(page_idx)
+                f.seek(offset)
+                f.write(struct.pack('i', empty_bucket.local_depth))
+                f.write(struct.pack('i', empty_bucket.overflow_page))
+                f.write(b'\x00' * self.bucket_disk_size)
+        
+        self.write_count += new_dir_size + 1
+        
+        # 5. Re-insertar todos los registros
+        for rec_fields in all_records:
+            key_value = rec_fields[self.key_name]
+            dir_idx = self._get_bucket_idx(key_value)
+            page_idx = self.directory[dir_idx]
+            
+            bucket = self._read_bucket(page_idx)
+            if not bucket.is_full():
+                rec = Record(self.schema, self.format, rec_fields)
+                bucket.put(rec)
+                self._write_bucket(page_idx, bucket)
+            else:
+                # Si aún así se llena, crear overflow
+                new_overflow_page = self.next_page_idx
+                self.next_page_idx += 1
+                bucket.overflow_page = new_overflow_page
+                self._write_bucket(page_idx, bucket)
+                
+                new_overflow = Bucket(local_depth=self.global_depth, overflow_page=-1)
+                rec = Record(self.schema, self.format, rec_fields)
+                new_overflow.put(rec)
+                self._write_bucket(new_overflow_page, new_overflow)
+                self._write_directory()
 
     def remove(self, key_value, key_name="id"):
         if self.key_name is None:
