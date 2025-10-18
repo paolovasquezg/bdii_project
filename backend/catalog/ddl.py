@@ -78,21 +78,25 @@ def backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
 
         records = get_physical_records(main, prim_kind, True)
 
-        rt = File._make_rtree(column, heap_ok=(prim_kind=="heap"))
+        # Create File instance to use its methods
+        file_inst = File(table)
+        rt = file_inst._make_rtree(column, heap_ok=(prim_kind=="heap"), reuse_cached=True)
         if prim_kind == "heap":
             for row_dict, pos in records:
                 if column not in row_dict: continue
-                ok, pt = File._as_point(row_dict[column])
+                ok, pt = file_inst._as_point(row_dict[column])
                 if not ok: continue
                 in_rec = {"pos": pos, column: pt, "deleted": False}
                 rt.insert(in_rec)
         else:
             for row_dict in records:
                 if column not in row_dict: continue
-                ok, pt = File._as_point(row_dict[column])
+                ok, pt = file_inst._as_point(row_dict[column])
                 if not ok: continue
                 in_rec = {"pk": row_dict[pk_name], column: pt, "deleted": False}
                 rt.insert(in_rec)
+        # Close cached rtrees to persist headers
+        file_inst._close_cached_rtrees()
 
 def _canon_index_kind(method: str) -> str:
     m = (method or "").strip().lower().replace(" ", "")

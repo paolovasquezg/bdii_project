@@ -39,6 +39,7 @@ class File:
         self._io = self._new_io()
         self.last_io = self._new_io()
         self._index_usage = []
+        self._cached_rtree = {}  # {field_name: RTree_wrapper} для переиспользования
 
     # ------------------------------ IO accounting ------------------------------------ #
 
@@ -122,16 +123,28 @@ class File:
         prim = self.indexes.get("primary") or self.indexes.get("indexes") or {}
         return prim.get("index"), prim.get("filename")
 
-    def _make_rtree(self, field: str, *, heap_ok: bool):
+    def _make_rtree(self, field: str, *, heap_ok: bool, reuse_cached: bool = False):
+        """Crea o reutiliza un RTree wrapper. Si reuse_cached=True, usa cache por sesión."""
+        if reuse_cached and field in self._cached_rtree:
+            return self._cached_rtree[field]
         idx_meta = self.indexes[field]
         idx_filename = idx_meta["filename"]
         data_dir = os.path.dirname(os.path.dirname(idx_filename))
-        return RTree(
+        rt = RTree(
             self.table, field, data_dir,
             key=field,
             M=int(idx_meta.get("M", 32)),
             heap_file=(self.indexes["primary"]["filename"] if heap_ok else None)
         )
+        if reuse_cached:
+            self._cached_rtree[field] = rt
+        return rt
+
+    def _close_cached_rtrees(self):
+        """Cierra todos los RTree cacheados (persist header)."""
+        for rt in self._cached_rtree.values():
+            rt.close()
+        self._cached_rtree.clear()
 
     def _as_point(self, v):
         import json
@@ -163,12 +176,50 @@ class File:
             self.index_log("primary", "heap", self.primary_key, "search_by_pos")
             return out
 
-        out = []
-        for it in items:
-            if isinstance(it, dict) and "pos" in it:
-                pk = it["pos"]
-                out.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}))
-        return out
+        # No-heap: 'pos' transporta la PK (numérica). Resolvemos directamente con el índice primario.
+        mainidx = (self.indexes.get("primary") or {}).get("index")
+        mainfile = (self.indexes.get("primary") or {}).get("filename")
+        if not mainidx or not mainfile:
+            return []
+
+        pks = [it["pos"] for it in items if isinstance(it, dict) and isinstance(it.get("pos"), int)]
+        if not pks:
+            return []
+
+        results = []
+        try:
+            if mainidx == "sequential":
+                sf = SeqFile(mainfile)
+                for pk in pks:
+                    recs = sf.search({"key": self.primary_key, "value": pk, "unique": True}, same_key=True)
+                    results.extend(recs or [])
+                self.io_merge(sf, "sequential")
+                self.index_log("primary", "sequential", self.primary_key, "search_by_pk_batch", note=str(len(pks)))
+            elif mainidx == "isam":
+                isf = IsamFile(mainfile)
+                for pk in pks:
+                    recs = isf.search({"key": self.primary_key, "value": pk, "unique": True}, same_key=True)
+                    results.extend(recs or [])
+                self.io_merge(isf, "isam")
+                self.index_log("primary", "isam", self.primary_key, "search_by_pk_batch", note=str(len(pks)))
+            elif mainidx == "bplus":
+                bp = BPlusFile(mainfile)
+                for pk in pks:
+                    recs = bp.search({"key": self.primary_key, "value": pk, "unique": True}, same_key=True)
+                    results.extend(recs or [])
+                self.io_merge(bp, "bplus")
+                self.index_log("primary", "bplus", self.primary_key, "search_by_pk_batch", note=str(len(pks)))
+            else:
+                # fallback a recursion si aparece algún modo no considerado
+                for pk in pks:
+                    results.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}) or [])
+        except Exception:
+            # ante cualquier error, intenta fallback por búsqueda estándar
+            tmp = []
+            for pk in pks:
+                tmp.extend(self.search({"op": "search", "field": self.primary_key, "value": pk}) or [])
+            results = tmp
+        return results
 
     def _usable_secondary_kind(self, field: str):
         # Nunca prefieras un "secundario" cuando el campo es la PK.
@@ -252,6 +303,7 @@ class File:
                                   if self.indexes["primary"]["index"] == "heap"
                                   else {"pk": rec[self.primary_key], index: pt, "deleted": False})
                         rt.insert(in_rec)
+                    rt.close()  # Explicit close for bulk build
                     self.io_merge(rt, "rtree")
                     self.index_log("secondary", "rtree", index, "build")
                 except Exception as e:
@@ -344,6 +396,14 @@ class File:
         if len(records) >= 1:
             is_heap = (self.indexes["primary"]["index"] == "heap")
 
+            # --- Ensure cached rtrees are created ---
+            for index in self.indexes:
+                if index == "primary" or self.indexes[index]["filename"] == mainfilename:
+                    continue
+                if self.indexes[index]["index"] == "rtree":
+                    if index not in self._cached_rtree:
+                        self._make_rtree(index, heap_ok=is_heap, reuse_cached=True)
+
             for index in self.indexes:
                 if index == "primary" or self.indexes[index]["filename"] == mainfilename:
                     continue
@@ -388,26 +448,26 @@ class File:
                         if DEBUG_IDX: print("[BPLUS insert secondary] skip:", e)
 
                 elif kind == "rtree":
-                    try:
-                        rt = self._make_rtree(index, heap_ok=is_heap)
-                        if is_heap:
-                            for row_dict, pos in records:
-                                if index not in row_dict: continue
-                                ok, pt = self._as_point(row_dict[index])
-                                if not ok: continue
-                                in_rec = {"pos": pos, index: pt, "deleted": False}
-                                rt.insert(in_rec)
-                        else:
-                            for row_dict in records:
-                                if index not in row_dict: continue
-                                ok, pt = self._as_point(row_dict[index])
-                                if not ok: continue
-                                in_rec = {"pk": row_dict[self.primary_key], index: pt, "deleted": False}
-                                rt.insert(in_rec)
-                        self.io_merge(rt, "rtree")
-                        self.index_log("secondary", "rtree", index, "insert")
-                    except Exception as e:
-                        if DEBUG_IDX: print("[RTREE insert secondary] skip:", e)
+                    # Access directly from cache to avoid local ref that triggers __del__
+                    rt = self._cached_rtree[index]
+                    if is_heap:
+                        for row_dict, pos in records:
+                            if index not in row_dict: continue
+                            ok, pt = self._as_point(row_dict[index])
+                            if not ok: continue
+                            in_rec = {"pos": pos, index: pt, "deleted": False}
+                            rt.insert(in_rec)
+                    else:
+                        for row_dict in records:
+                            if index not in row_dict: continue
+                            ok, pt = self._as_point(row_dict[index])
+                            if not ok: continue
+                            in_rec = {"pk": row_dict[self.primary_key], index: pt, "deleted": False}
+                            rt.insert(in_rec)
+                    # DO NOT close here; let import_csv close all at end
+                    if DEBUG_IDX: print(f"[RTREE insert secondary] after batch: records={len(records)}")
+                    self.io_merge(rt, "rtree")
+                    self.index_log("secondary", "rtree", index, "insert")
 
         self.last_io = self.io_get()
         return records
@@ -617,7 +677,7 @@ class File:
                     self.index_log("secondary", "rtree", field, "range_rect")
                     out = self._bridge_from_rtree(items)
                     self.last_io = self.io_get()
-                    records = out
+                    return out
                 except Exception as e:
                     if DEBUG_IDX: print("[RTREE range_search secondary] skip:", e)
                     return []
@@ -861,7 +921,7 @@ class File:
                 return []
         elif params["op"] == "import_csv":
             path = params["path"]
-            inserted = 0
+            all_recs = []
             with open(path, newline="", encoding="utf-8") as f:
                 r = csv.DictReader(f)
                 for row in r:
@@ -880,10 +940,15 @@ class File:
                         elif t in ("float", "real", "f", "double"):
                             v = float(v)
                         rec[col] = v
-                    self.insert({"record": rec})
-                    inserted += 1
+                    all_recs.append(rec)
+            # Insert all at once (cached rtrees will accumulate across calls)
+            for rec in all_recs:
+                self.insert({"record": rec})
+            # Close all cached rtrees to persist headers
+            self._close_cached_rtrees()
+            if DEBUG_IDX: print(f"[import_csv] closed cached rtrees after {len(all_recs)} records")
             self.last_io = self.io_get()
-            return {"count": inserted}
+            return {"count": len(all_recs)}
         
         elif params["op"] == "get_all":
             return self.get_all()

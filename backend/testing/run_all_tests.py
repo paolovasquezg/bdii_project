@@ -6,6 +6,7 @@ import subprocess
 import re
 from pathlib import Path
 from typing import List, Tuple
+import os
 
 # ---------- Config ----------
 DEFAULT_ORDER = [
@@ -25,6 +26,8 @@ SEARCH_DIRS = [
 ]
 
 PYTHON = sys.executable or "python3"
+# Proyecto raíz (dos niveles arriba de backend/testing)
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Detecta ok:false tanto en JSON como en repr de dicts de Python
 RE_OK_FALSE = re.compile(r"""["']ok["']\s*:\s*(false|False)""")
@@ -51,9 +54,19 @@ def run_test(path: Path) -> Tuple[int, float, int]:
 
     start = time.time()
     cwd = path.parent
+    # Asegurar que el subproceso vea el paquete 'backend'
+    env = os.environ.copy()
+    sep = ":" if os.name != "nt" else ";"
+    env["PYTHONPATH"] = (
+        str(REPO_ROOT)
+        if not env.get("PYTHONPATH")
+        else str(REPO_ROOT) + sep + env.get("PYTHONPATH", "")
+    )
+
     proc = subprocess.Popen(
         [PYTHON, str(path.name)],
         cwd=str(cwd),
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,

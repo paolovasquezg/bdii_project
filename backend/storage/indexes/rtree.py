@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 import os, struct, io
 
+DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
+
 MBR = Tuple[float, float, float, float]
 RID = Tuple[int, int]
 
@@ -39,8 +41,20 @@ class RTreeFile:
         if not self.opened:
             self.store.open()
             if self.store.root == 0:
-                root = Node(page_id=0, is_leaf=True, M=self.store.M)
-                self.store.write_node(root)
+                # Check if root page already exists and has content
+                try:
+                    root = self.store.read_node(0)
+                    if len(root.entries) > 0:
+                        # Root already populated, don't overwrite
+                        pass
+                    else:
+                        # Root exists but is empty, initialize it
+                        root = Node(page_id=0, is_leaf=True, M=self.store.M)
+                        self.store.write_node(root)
+                except Exception:
+                    # Root doesn't exist or error, create new
+                    root = Node(page_id=0, is_leaf=True, M=self.store.M)
+                    self.store.write_node(root)
             self.opened = True
 
     def close(self):
@@ -122,10 +136,18 @@ class RTreeFile:
 
     # ---------- public ops ----------
     def insert(self, record: dict, additional: dict) -> List[dict]:
-        """record debe traer: 'pos', opcional 'slot', y la columna espacial en additional['key']"""
+        """Inserta una entrada en el R-Tree.
+
+        Soporta dos modalidades de identificador en hojas:
+        - Primario HEAP: record['pos'] (y opcional record['slot'])
+        - Primario NO-HEAP: record['pk'] (slot=0)
+
+        La columna espacial debe venir en additional['key'].
+        """
         self.open()
         key = additional["key"]        # ej. "ubicacion"
         val = record[key]
+        if DEBUG_IDX: print(f"[RTREE insert] key={key} val={val} record={record}")
         if isinstance(val, (list, tuple)) and len(val) == 2:
             m = from_point(float(val[0]), float(val[1]))
         elif isinstance(val, (list, tuple)) and len(val) == 4:
@@ -144,7 +166,20 @@ class RTreeFile:
             cur = best.child
 
         # insertar en hoja
-        pos = record["pos"]; slot = record.get("slot", 0)
+        # Determinar identificador: posición de heap o pk (no-heap)
+        if "pos" in record and record["pos"] is not None:
+            pos = int(record["pos"])  # posición en heap
+            slot = int(record.get("slot", 0))
+        elif "pk" in record and record["pk"] is not None:
+            # Guardamos pk en el campo 'page' del RID y usamos slot=0
+            try:
+                pos = int(record["pk"])  # PK numérica requerida
+            except Exception as e:
+                raise ValueError("RTreeFile.insert: 'pk' debe ser numérica para primarios no-heap") from e
+            slot = 0
+        else:
+            raise KeyError("pos")  # mantener compat con manejo actual en capas superiores
+
         node.entries.append(Entry(mbr=m, rid=(pos, slot)))
         if len(node.entries) <= self.store.M:
             self.store.write_node(node)
@@ -416,11 +451,15 @@ class Storage:
                 self.read_count, self.write_count = r, w
 
     def close(self):
+        if DEBUG_IDX:
+            print(f"[Storage.close] root={self.root} height={self.height} filename={self.filename}")
         with open(self.filename, "r+b") as f:
             f.seek(0)
             f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
                                 self.root, self.height, self.page_size,
                                 self.read_count, self.write_count))
+        if DEBUG_IDX:
+            print(f"[Storage.close] wrote header with root={self.root} height={self.height}")
 
     # ---- páginas
     def alloc_page(self) -> int:
@@ -449,7 +488,11 @@ class Storage:
         with open(self.filename, "r+b") as f:
             f.seek(struct.calcsize(HEADER_FMT) + node.page_id * self.page_size)
             f.write(data)
+            f.flush()
+            os.fsync(f.fileno())  # Force OS to write to disk
         self.write_count += 1
+        if DEBUG_IDX and node.is_leaf:
+            print(f"[write_node] wrote leaf page_id={node.page_id} entries={len(node.entries)}")
 
     def read_node(self, page_id: int) -> Node:
         with open(self.filename, "rb") as f:
@@ -534,6 +577,23 @@ class RTree:
         self.rt = RTreeFile(self.filename, M=M)
         self.read_count = self.rt.store.read_count
         self.write_count = self.rt.store.write_count
+
+    def close(self):
+        """Cierra el archivo R-Tree subyacente (persiste el header con root/height actualizado)."""
+        if DEBUG_IDX:
+            print(f"[RTree.close] filename={self.filename} root={self.rt.store.root} height={self.rt.store.height} opened={self.rt.opened}")
+        self.rt.close()
+        if DEBUG_IDX:
+            print(f"[RTree.close] after rt.close() opened={self.rt.opened}")
+
+    def __del__(self):
+        """Finalizer: Cierra el RTreeFile al destruir el wrapper (CPython: cierre al salir de scope)."""
+        try:
+            if DEBUG_IDX:
+                print(f"[RTree.__del__] filename={self.filename}")
+            self.close()
+        except Exception:
+            pass
 
     # --- escritura ---
     def insert(self, record: dict):

@@ -76,7 +76,8 @@ def main():
         CREATE TABLE {tbl} (
             id INT PRIMARY KEY,
             name VARCHAR(32),
-            coords VARCHAR(64)
+            coords VARCHAR(64),
+            INDEX (id) using sequential
         );
     """)
 
