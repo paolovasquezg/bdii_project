@@ -575,6 +575,8 @@ class RTree:
         idx_dir.mkdir(parents=True, exist_ok=True)
         self.filename = str(idx_dir / f"{table}_rtree_{column}.idx")
         self.rt = RTreeFile(self.filename, M=M)
+
+        # contadores como atributos (se actualizarán con _sync_io_counts)
         self.read_count = self.rt.store.read_count
         self.write_count = self.rt.store.write_count
 
@@ -584,6 +586,12 @@ class RTree:
         self._i2p = {}
         self._next_id = 1
         self._load_map()
+
+    # ---------- helpers ----------
+    def _sync_io_counts(self):
+        """Sincroniza los atributos públicos con los contadores del Storage."""
+        self.read_count = self.rt.store.read_count
+        self.write_count = self.rt.store.write_count
 
     # ---------- mapping helpers (non-int PK support) ----------
     def _load_map(self):
@@ -657,8 +665,9 @@ class RTree:
         if DEBUG_IDX:
             print(f"[RTree.close] filename={self.filename} root={self.rt.store.root} height={self.rt.store.height} opened={self.rt.opened}")
         self.rt.close()
+        self._sync_io_counts()
         if DEBUG_IDX:
-            print(f"[RTree.close] after rt.close() opened={self.rt.opened}")
+            print(f"[RTree.close] after rt.close() opened={self.rt.opened} read={self.read_count} write={self.write_count}")
 
     def __del__(self):
         """Finalizer: Cierra el RTreeFile al destruir el wrapper (CPython: cierre al salir de scope)."""
@@ -677,7 +686,9 @@ class RTree:
         rec = dict(record)
         if "pk" in rec and rec["pk"] is not None and not isinstance(rec["pk"], int):
             rec["pk"] = self._pk_to_int(rec["pk"])  # map non-int pk to surrogate
-        return self.rt.insert(rec, additional)
+        res = self.rt.insert(rec, additional)
+        self._sync_io_counts()
+        return res
 
     def remove(self, record: dict):
         """
@@ -707,8 +718,9 @@ class RTree:
         if self.heap_file:
             add["heap"] = self.heap_file
 
-        return self.rt.remove(add)
-
+        res = self.rt.remove(add)
+        self._sync_io_counts()
+        return res
 
     # --- lecturas ---
     def search_rect(self, xmin: float, xmax: float, ymin: float, ymax: float):
@@ -721,7 +733,9 @@ class RTree:
                     it = dict(it)
                     it["pos"] = self._int_to_pk(it["pos"])  # may return int (original) or non-int
                 out.append(it)
+            self._sync_io_counts()
             return out
+        self._sync_io_counts()
         return items
 
     def range(self, x: float, y: float, r: float):
@@ -733,7 +747,9 @@ class RTree:
                     it = dict(it)
                     it["pos"] = self._int_to_pk(it["pos"])  # reverse map
                 out.append(it)
+            self._sync_io_counts()
             return out
+        self._sync_io_counts()
         return items
 
     def knn(self, x: float, y: float, k: int):
@@ -745,5 +761,7 @@ class RTree:
                     it = dict(it)
                     it["pos"] = self._int_to_pk(it["pos"])  # reverse map
                 out.append(it)
+            self._sync_io_counts()
             return out
+        self._sync_io_counts()
         return items
