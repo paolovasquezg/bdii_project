@@ -14,7 +14,7 @@ KEYWORDS = {
     "INT","INTEGER","SMALLINT","BIGINT","FLOAT","REAL","DOUBLE",
     "PRECISION","CHAR","VARCHAR","STRING","BOOL","BOOLEAN",
     "TRUE","FALSE","NULL","LIKE","IN","IS","AS",
-    "FILE","POINT"
+    "FILE","POINT", "KNN"
 }
 
 # operadores que necesitamos en este dialecto
@@ -207,6 +207,12 @@ class GeoWithin:
     ident: str
     center: Any      # dict {"kind":"point","x":..,"y":..} o literal/ident
     radius: Any      # número o literal
+
+@dataclass
+class Knn:
+    ident: str              # columna (coords)
+    point: Any              # {"kind":"point","x":..,"y":..}
+    k: int
 
 # ---------------------------
 # Parser (recursive descent)
@@ -552,6 +558,19 @@ class _Parser:
             return e
 
         ident = self._parse_ident()
+
+        if self._accept("KW", "KNN"):
+            self._expect("OP", "(")
+            center = self._parse_point()  # POINT(x,y)
+            self._expect("OP", ",")
+            k_lit = self._parse_literal()  # k
+            self._expect("OP", ")")
+            try:
+                k_val = int(float(k_lit))
+            except Exception:
+                raise SyntaxError("k debe ser entero en KNN(...)")
+            return Knn(ident=ident, point=center, k=k_val)
+
         if self._accept("KW", "BETWEEN"):
             lo = self._parse_literal()
             self._expect("KW", "AND")

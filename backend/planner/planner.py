@@ -194,6 +194,20 @@ class Planner:
                             # Si el centro no es POINT, dejamos que el executor filtre genérico
                             plans.append({"action": "select", "table": table, "columns": cols, "where": where})
 
+                    elif {"ident", "point", "k"} <= set(where.keys()):
+                        center = where["point"]
+                        if isinstance(center, dict) and center.get("kind") == "point":
+                            plans.append({
+                                "action": "knn",
+                                "table": table,
+                                "field": where["ident"],
+                                "point": (center["x"], center["y"]),
+                                "k": int(where["k"])
+                            })
+                        else:
+                            # fallback genérico (no debería ocurrir si parseamos POINT)
+                            plans.append({"action": "select", "table": table, "columns": cols, "where": where})
+
                     # 5) AND entre (BETWEEN) y (=) en cualquier orden -> range + post_filter
                     elif where.get("op") == "AND" and isinstance(where.get("items"), list) and len(where["items"]) == 2:
                         a, b = where["items"]

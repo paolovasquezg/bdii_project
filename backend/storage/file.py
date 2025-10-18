@@ -147,11 +147,25 @@ class File:
 
     def _as_point(self, v):
         import json
-        if isinstance(v, str) and v.startswith("[") and v.endswith("]"):
-            try: v = json.loads(v)
-            except Exception: return False, None
+        if isinstance(v, str):
+            s = v.strip()
+            # JSON list: "[55,3]"
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    j = json.loads(s)
+                    if isinstance(j, (list, tuple)) and len(j) >= 2:
+                        return True, [float(j[0]), float(j[1])]
+                except Exception:
+                    pass
+            # CSV-like: "55,3"
+            if "," in s:
+                try:
+                    x_str, y_str = s.split(",", 1)
+                    return True, [float(x_str), float(y_str)]
+                except Exception:
+                    pass
         if isinstance(v, (list, tuple)) and len(v) >= 2 \
-           and isinstance(v[0], (int, float)) and isinstance(v[1], (int, float)):
+                and isinstance(v[0], (int, float)) and isinstance(v[1], (int, float)):
             return True, [float(v[0]), float(v[1])]
         return False, None
 
