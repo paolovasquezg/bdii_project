@@ -418,17 +418,50 @@ class Storage:
         self.page_size = DEFAULT_PAGE_SIZE
         self.root = 0
         self.height = 1
-        self.read_count = 0
-        self.write_count = 0
+
+        # --- contadores internos (totales) + baseline para reportar delta ---
+        self._r_total = 0
+        self._w_total = 0
+        self._r_reported = 0
+        self._w_reported = 0
+
+    # --- propiedades: exponen DELTA y permiten setear TOTALES al cargar ---
+    @property
+    def read_count(self) -> int:
+        delta = self._r_total - self._r_reported
+        self._r_reported = self._r_total
+        return delta
+
+    @read_count.setter
+    def read_count(self, v: int):
+        self._r_total = int(v or 0)
+        self._r_reported = self._r_total
+
+    @property
+    def write_count(self) -> int:
+        delta = self._w_total - self._w_reported
+        self._w_reported = self._w_total
+        return delta
+
+    @write_count.setter
+    def write_count(self, v: int):
+        self._w_total = int(v or 0)
+        self._w_reported = self._w_total
 
     def open(self):
         os.makedirs(os.path.dirname(self.filename), exist_ok=True)
         if not os.path.exists(self.filename):
             with open(self.filename, "wb") as f:
-                f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
-                                    0, self.height, self.page_size,
-                                    self.read_count, self.write_count))
+                # archivo nuevo: persiste totales 0
+                f.write(struct.pack(
+                    HEADER_FMT, MAGIC, VERSION, self.M, self.m,
+                    0, self.height, self.page_size,
+                    0, 0
+                ))
                 f.write(b"\x00" * self.page_size)  # página 0
+            # baseline 0
+            self.read_count = 0
+            self.write_count = 0
         else:
             with open(self.filename, "rb") as f:
                 hdr = f.read(struct.calcsize(HEADER_FMT))
@@ -439,25 +472,35 @@ class Storage:
             # si el archivo estaba sucio (por ej., JSON), recrear
             if magic != MAGIC or ver != VERSION:
                 with open(self.filename, "wb") as f:
-                    self.root = 0; self.height = 1
-                    self.read_count = 0; self.write_count = 0
-                    f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
-                                        0, self.height, self.page_size,
-                                        self.read_count, self.write_count))
+                    self.root = 0
+                    self.height = 1
+                    # reinicia totales a 0
+                    self.read_count = 0
+                    self.write_count = 0
+                    f.write(struct.pack(
+                        HEADER_FMT, MAGIC, VERSION, self.M, self.m,
+                        0, self.height, self.page_size,
+                        0, 0
+                    ))
                     f.write(b"\x00" * self.page_size)
             else:
                 self.M, self.m, self.root, self.height = M, m, root, height
                 self.page_size = page_size
-                self.read_count, self.write_count = r, w
+                # inicializa TOTALES (+ baseline) desde header
+                self.read_count = r
+                self.write_count = w
 
     def close(self):
         if DEBUG_IDX:
             print(f"[Storage.close] root={self.root} height={self.height} filename={self.filename}")
         with open(self.filename, "r+b") as f:
             f.seek(0)
-            f.write(struct.pack(HEADER_FMT, MAGIC, VERSION, self.M, self.m,
-                                self.root, self.height, self.page_size,
-                                self.read_count, self.write_count))
+            # persiste TOTALES (no el delta)
+            f.write(struct.pack(
+                HEADER_FMT, MAGIC, VERSION, self.M, self.m,
+                self.root, self.height, self.page_size,
+                self._r_total, self._w_total
+            ))
         if DEBUG_IDX:
             print(f"[Storage.close] wrote header with root={self.root} height={self.height}")
 
@@ -468,6 +511,8 @@ class Storage:
         used_pages = (size - header) // self.page_size
         with open(self.filename, "ab") as f:
             f.write(b"\x00" * self.page_size)
+        # cuenta la escritura de la nueva página
+        self._w_total += 1
         return used_pages
 
     # ---- nodos
@@ -490,7 +535,8 @@ class Storage:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())  # Force OS to write to disk
-        self.write_count += 1
+        # contar escritura de página de nodo
+        self._w_total += 1
         if DEBUG_IDX and node.is_leaf:
             print(f"[write_node] wrote leaf page_id={node.page_id} entries={len(node.entries)}")
 
@@ -498,7 +544,8 @@ class Storage:
         with open(self.filename, "rb") as f:
             f.seek(struct.calcsize(HEADER_FMT) + page_id * self.page_size)
             raw = f.read(self.page_size)
-        self.read_count += 1
+        # contar lectura de página de nodo
+        self._r_total += 1
         is_leaf, count = struct.unpack_from("<B H", raw, 0)
         off = 3
         entries: List[Entry] = []
