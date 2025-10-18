@@ -2,11 +2,14 @@ import struct
 from backend.core.record import Record
 from backend.catalog.catalog import get_json
 from backend.core.utils import build_format
-
-
+ 
 BUCKET_SIZE = 5
 HEADER_FORMAT = 'ii'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+FILE_HEADER_FORMAT_OLD = 'ii'
+FILE_HEADER_FORMAT = 'iii'
+FILE_HEADER_SIZE_OLD = struct.calcsize(FILE_HEADER_FORMAT_OLD) 
+FILE_HEADER_SIZE = struct.calcsize(FILE_HEADER_FORMAT) 
 INITIAL_MAX_CHAIN = 2
 MAX_GLOBAL_DEPTH = 20 
 
@@ -72,7 +75,6 @@ class ExtendibleHashingFile:
         self.record_size = struct.calcsize(self.format)
         self.bucket_disk_size = self.record_size * BUCKET_SIZE
 
-        # Cachear offsets para evitar recalcular en cada operación
         self._json_offset_cached = None
         self._pages_base_offset_cached = None
 
@@ -80,6 +82,8 @@ class ExtendibleHashingFile:
         self.global_depth = 1
         self.directory = [0, 1]
         self.next_page_idx = 2
+        self.dir_capacity = 2 
+        self._file_header_size = FILE_HEADER_SIZE
         self.read_count = 0
         self.write_count = 0
 
@@ -104,11 +108,12 @@ class ExtendibleHashingFile:
             return 0
 
     def _pages_base_offset(self) -> int:
+        # Región de páginas empieza después del file header + directorio (capacidad actual)
         if self._pages_base_offset_cached is not None:
             return self._pages_base_offset_cached
-        max_dir_entries = 1 << MAX_GLOBAL_DEPTH
-        self._pages_base_offset_cached = self._json_offset() + 8 + max_dir_entries * 4
-        return self._pages_base_offset_cached
+        base = self._json_offset() + self._file_header_size + (self.dir_capacity * 4)
+        self._pages_base_offset_cached = base
+        return base
 
     def _get_page_offset(self, page_idx):
         return self._pages_base_offset() + page_idx * (HEADER_SIZE + self.bucket_disk_size)
@@ -130,18 +135,41 @@ class ExtendibleHashingFile:
             with open(self.filename, 'r+b') as f:
                 off = self._json_offset()
                 f.seek(off)
-                header = f.read(8)
-                if not header or header == b'\x00' * 8:
+                # Intentar leer header nuevo primero
+                header = f.read(FILE_HEADER_SIZE)
+                if header and header != b'\x00' * FILE_HEADER_SIZE:
+                    self.read_count += 1
+                    gd, npi, cap = struct.unpack(FILE_HEADER_FORMAT, header)
+                    self.global_depth, self.next_page_idx = gd, npi
+                    self.dir_capacity = max(2, cap)
+                    self._file_header_size = FILE_HEADER_SIZE
+                    # Leer directorio con padding a dir_capacity, truncar a 2^global_depth
+                    dir_bytes = f.read(self.dir_capacity * 4)
+                    real_dir = 1 << self.global_depth
+                    if len(dir_bytes) < real_dir * 4:
+                        self._init_file()
+                        return
+                    unpacked = list(struct.unpack(f'{self.dir_capacity}i', dir_bytes))
+                    self.directory = unpacked[:real_dir]
+                    self._pages_base_offset_cached = None
+                    return
+                # Fallback: intentar header legacy (8 bytes)
+                f.seek(off)
+                header_old = f.read(FILE_HEADER_SIZE_OLD)
+                if not header_old or header_old == b'\x00' * FILE_HEADER_SIZE_OLD:
                     self._init_file()
                     return
                 self.read_count += 1
-                self.global_depth, self.next_page_idx = struct.unpack('ii', header)
-                dir_size = 1 << self.global_depth
-                dir_bytes = f.read(dir_size * 4)
-                if len(dir_bytes) != dir_size * 4:
+                gd, npi = struct.unpack(FILE_HEADER_FORMAT_OLD, header_old)
+                self.global_depth, self.next_page_idx = gd, npi
+                self.dir_capacity = max(2, (1 << self.global_depth))
+                self._file_header_size = FILE_HEADER_SIZE_OLD
+                dir_bytes = f.read((1 << self.global_depth) * 4)
+                if len(dir_bytes) != (1 << self.global_depth) * 4:
                     self._init_file()
                     return
-                self.directory = list(struct.unpack(f'{dir_size}i', dir_bytes))
+                self.directory = list(struct.unpack(f'{1 << self.global_depth}i', dir_bytes))
+                self._pages_base_offset_cached = None
         except FileNotFoundError:
             self._init_file()
 
@@ -149,6 +177,8 @@ class ExtendibleHashingFile:
         self.global_depth = 1
         self.directory = [0, 1]
         self.next_page_idx = 2
+        self.dir_capacity = 2
+        self._file_header_size = FILE_HEADER_SIZE
         try:
             f = open(self.filename, 'r+b')
         except FileNotFoundError:
@@ -156,13 +186,13 @@ class ExtendibleHashingFile:
         with f:
             off = self._json_offset()
             f.seek(off)
-            # Escribir header
-            f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
-            # Escribir directorio con padding hasta MAX_GLOBAL_DEPTH
-            max_entries = 1 << MAX_GLOBAL_DEPTH
-            padded_dir = self.directory + [-1] * (max_entries - len(self.directory))
-            f.write(struct.pack(f'{max_entries}i', *padded_dir))
-            self.write_count+=1
+            # Escribir header nuevo y directorio con padding a capacidad
+            f.write(struct.pack(FILE_HEADER_FORMAT, self.global_depth, self.next_page_idx, self.dir_capacity))
+            padded_dir = self.directory + [-1] * (self.dir_capacity - len(self.directory))
+            f.write(struct.pack(f'{self.dir_capacity}i', *padded_dir))
+            self.write_count += 2
+            # Invalidar cache
+            self._pages_base_offset_cached = None
 
             f.seek(self._get_page_offset(0))
             f.write(struct.pack('i', 1))
@@ -199,12 +229,35 @@ class ExtendibleHashingFile:
             self.write_count += 3
 
     def _write_directory(self):
+        # Reescribe header y directorio con padding a capacidad
         with open(self.filename, 'r+b') as f:
             base = self._json_offset()
             f.seek(base)
-            f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
-            f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
+            f.write(struct.pack(FILE_HEADER_FORMAT, self.global_depth, self.next_page_idx, self.dir_capacity))
+            real_dir = 1 << self.global_depth
+            padded_dir = self.directory + [-1] * (self.dir_capacity - real_dir)
+            f.write(struct.pack(f'{self.dir_capacity}i', *padded_dir))
             self.write_count += 2
+        self._pages_base_offset_cached = None
+
+    def _grow_directory(self, new_capacity: int):
+        """Aumenta la capacidad del directorio y reubica la región de páginas si cambia el offset."""
+        new_capacity = max(new_capacity, 1 << self.global_depth)
+        if new_capacity <= self.dir_capacity:
+            return
+        # Calcular offsets antiguos/nuevos y tamaño región páginas
+        old_pages_off = self._pages_base_offset()
+        page_span = HEADER_SIZE + self.bucket_disk_size
+        region_size = self.next_page_idx * page_span
+        new_pages_off = self._json_offset() + FILE_HEADER_SIZE + (new_capacity * 4)
+        # Leer y mover región de páginas
+        with open(self.filename, 'r+b') as f:
+            f.seek(old_pages_off)
+            data = f.read(region_size)
+            f.seek(new_pages_off)
+            f.write(data)
+        self.dir_capacity = new_capacity
+        self._write_directory()
 
     def _read_chain(self, page_idx):
         chain = []
@@ -328,6 +381,9 @@ class ExtendibleHashingFile:
         if old_local == self.global_depth:
             self.directory = self.directory + self.directory
             self.global_depth += 1
+            # Asegurar capacidad suficiente (doblar si es necesario)
+            if (1 << self.global_depth) > self.dir_capacity:
+                self._grow_directory(max(self.dir_capacity * 2, 1 << self.global_depth))
 
         new_page_idx = self.next_page_idx
         self.next_page_idx += 1
