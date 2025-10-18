@@ -72,6 +72,10 @@ class ExtendibleHashingFile:
         self.record_size = struct.calcsize(self.format)
         self.bucket_disk_size = self.record_size * BUCKET_SIZE
 
+        # Cachear offsets para evitar recalcular en cada operación
+        self._json_offset_cached = None
+        self._pages_base_offset_cached = None
+
         # Estado en memoria
         self.global_depth = 1
         self.directory = [0, 1]
@@ -79,25 +83,32 @@ class ExtendibleHashingFile:
         self.read_count = 0
         self.write_count = 0
 
-
         self.key_name = None
         self._load_or_init()
 
     def _json_offset(self) -> int:
+        if self._json_offset_cached is not None:
+            return self._json_offset_cached
         try:
             with open(self.filename, 'rb') as f:
                 b = f.read(4)
-                self.read_count+=1
+                self.read_count += 1
                 if not b or len(b) < 4:
+                    self._json_offset_cached = 0
                     return 0
                 size = struct.unpack('I', b)[0]
-                return 4 + size
+                self._json_offset_cached = 4 + size
+                return self._json_offset_cached
         except FileNotFoundError:
+            self._json_offset_cached = 0
             return 0
 
     def _pages_base_offset(self) -> int:
+        if self._pages_base_offset_cached is not None:
+            return self._pages_base_offset_cached
         max_dir_entries = 1 << MAX_GLOBAL_DEPTH
-        return self._json_offset() + 8 + max_dir_entries * 4
+        self._pages_base_offset_cached = self._json_offset() + 8 + max_dir_entries * 4
+        return self._pages_base_offset_cached
 
     def _get_page_offset(self, page_idx):
         return self._pages_base_offset() + page_idx * (HEADER_SIZE + self.bucket_disk_size)
@@ -204,16 +215,27 @@ class ExtendibleHashingFile:
             cur = b.overflow_page
         return chain
 
-    def find(self, key_value, key_name):
+    def find(self, key_value, key_name, unique=False):
+        """
+        Busca registros por key_value.
+        Si unique=True, corta en cuanto encuentra el primer match.
+        """
         if self.key_name is None:
             self.key_name = key_name
         dir_idx = self._get_bucket_idx(key_value)
         page_idx = self.directory[dir_idx]
         result = []
-        for _, bucket in self._read_chain(page_idx):
+        
+        cur = page_idx
+        while cur != -1:
+            bucket = self._read_bucket(cur)
             for rec in bucket.records:
                 if rec.fields[key_name] == key_value and not rec.fields.get("deleted", False):
                     result.append({k: v for k, v in rec.fields.items() if k != 'deleted'})
+                    if unique:
+                        return result 
+            cur = bucket.overflow_page
+        
         return result
 
     def _chain_bit_counts(self, chain, bit_pos):
@@ -340,17 +362,29 @@ class ExtendibleHashingFile:
         for rec in old_records:
             self.insert(rec.fields, self.key_name)
 
-    def remove(self, key_value, key_name="id"):
+    def remove(self, key_value, key_name="id", unique=False):
+        """
+        Remueve registros que coincidan con key_value.
+        Si unique=True, corta en cuanto remueva el primero.
+        """
         if self.key_name is None:
             self.key_name = key_name
         dir_idx = self._get_bucket_idx(key_value)
         page_idx = self.directory[dir_idx]
         removed = []
-        for curr_page, curr_bucket in self._read_chain(page_idx):
-            rem = curr_bucket.remove(key_value, key_name)
+        
+        # Recorrer cadena bucket por bucket
+        cur = page_idx
+        while cur != -1:
+            bucket = self._read_bucket(cur)
+            rem = bucket.remove(key_value, key_name)
             if rem:
-                self._write_bucket(curr_page, curr_bucket)
+                self._write_bucket(cur, bucket)
                 removed.extend([r.fields for r in rem])
+                if unique:
+                    return removed  # Cortar si unique y ya removimos uno
+            cur = bucket.overflow_page
+        
         return removed if removed else None
 
     def get_all_records(self):

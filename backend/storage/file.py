@@ -544,7 +544,8 @@ class File:
             if kind == "hash":
                 try:
                     h = ExtendibleHashingFile(filename)
-                    records = h.find(value, field)
+                    is_unique = additional.get("unique", False)
+                    records = h.find(value, field, unique=is_unique)
                     self.io_merge(h, "hash")
                     self.index_log("secondary", "hash", field, "search")
                 except Exception as e:
