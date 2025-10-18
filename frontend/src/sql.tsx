@@ -30,8 +30,7 @@ const SQLQueryInterface = () => {
     if (response.success && tables.success) {
       if (response.data.ok) {
         const first = response.data.results?.[0] || {}
-        const action = first?.plan?.action
-        if (action == "select") setResults(first?.data || [])
+        setResults(first?.data || [])
         setLastIO(first?.meta?.io || null)
         setLastPlan(first?.plan || null)
         setmessage(`Executed: ${first?.meta?.time_ms ?? response.data?.stats?.time_ms ?? ""} ms`)
