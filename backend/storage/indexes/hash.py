@@ -87,6 +87,7 @@ class ExtendibleHashingFile:
         try:
             with open(self.filename, 'rb') as f:
                 b = f.read(4)
+                self.read_count+=1
                 if not b or len(b) < 4:
                     return 0
                 size = struct.unpack('I', b)[0]
@@ -150,11 +151,14 @@ class ExtendibleHashingFile:
             max_entries = 1 << MAX_GLOBAL_DEPTH
             padded_dir = self.directory + [-1] * (max_entries - len(self.directory))
             f.write(struct.pack(f'{max_entries}i', *padded_dir))
+            self.write_count+=1
 
             f.seek(self._get_page_offset(0))
             f.write(struct.pack('i', 1))
             f.write(struct.pack('i', -1))
             f.write(b'\x00' * self.bucket_disk_size)
+
+            self.write_count+=3
 
             f.seek(self._get_page_offset(1))
             f.write(struct.pack('i', 1))
@@ -170,7 +174,7 @@ class ExtendibleHashingFile:
             local_depth = struct.unpack('i', f.read(4))[0]
             overflow_page = struct.unpack('i', f.read(4))[0]
             data = f.read(self.bucket_disk_size)
-            self.read_count += 1
+            self.read_count += 2
             return Bucket.unpack(data, local_depth, overflow_page,
                                  self.record_size, self.format, self.schema)
 
@@ -181,7 +185,7 @@ class ExtendibleHashingFile:
             f.write(struct.pack('i', bucket.local_depth))
             f.write(struct.pack('i', bucket.overflow_page))
             f.write(bucket.pack(self.record_size, self.format, self.schema))
-            self.write_count += 1
+            self.write_count += 3
 
     def _write_directory(self):
         with open(self.filename, 'r+b') as f:
@@ -189,7 +193,7 @@ class ExtendibleHashingFile:
             f.seek(base)
             f.write(struct.pack('ii', self.global_depth, self.next_page_idx))
             f.write(struct.pack(f'{len(self.directory)}i', *self.directory))
-            self.write_count += 1
+            self.write_count += 2
 
     def _read_chain(self, page_idx):
         chain = []
