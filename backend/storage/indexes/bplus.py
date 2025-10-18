@@ -7,11 +7,11 @@ Order = 4
 
 class Node:
 
-    def __init__(self, order=Order, is_leaf=True, records=[], children=[], next_node=-1, parent=-1):
+    def __init__(self, order=Order, is_leaf=True, records=None, children=None, next_node=-1, parent=-1):
         self.order = order
         self.is_leaf = is_leaf
-        self.records = records
-        self.children = children
+        self.records = list(records) if records is not None else []
+        self.children = list(children) if children is not None else []
         self.next_node = next_node
         self.parent = parent
     
@@ -204,10 +204,31 @@ class BPlusFile:
             schema_size = self._read_schema_size(f)
             leaf_page, leaf = self._find_leaf_page(record[keyname], keyname)
 
-            for r in leaf.records:
-                if not r.fields.get('deleted') and r.fields.get(keyname) == record[keyname]:
-                    if additional.get('unique'):
-                        return []
+            if additional.get('unique'):
+                val = record[keyname]
+                curr = leaf_page
+                visited = set()
+                total = max(2, self._total_pages(f, schema_size))
+                hops = 0
+                while curr != -1:
+                    if curr in visited:
+                        break
+                    visited.add(curr)
+                    node = self._read_node_at(f, schema_size, curr)
+                    for r in node.records:
+                        k = self._get_key_from_record(r, keyname)
+                        if k is None:
+                            continue
+                        if not r.fields.get('deleted') and k == val:
+                            return []
+                        if k > val:
+                            curr = -1
+                            break
+                    if curr != -1:
+                        curr = node.next_node
+                        hops += 1
+                        if hops > total + 1:
+                            break
 
             new_rec = Record(self.schema, self.format, record)
             i = 0
@@ -248,6 +269,10 @@ class BPlusFile:
         keyname = additional['key']
 
         promote_record = Record(self.schema, self.format, {keyname: key_value})
+        try:
+            promote_record.fields['deleted'] = True
+        except Exception:
+            pass
 
         if parent_page == -1:
             total = self._total_pages(f, schema_size)
@@ -304,14 +329,13 @@ class BPlusFile:
         keyname = additional['key']
         mid = len(node.records) // 2
         promote_rec = node.records[mid]
+        try:
+            promote_rec.fields['deleted'] = True
+        except Exception:
+            pass
         promote_key = self._get_key_from_record(promote_rec, keyname)
 
         right = Node(is_leaf=False, records=node.records[mid + 1:], children=node.children[mid + 1:], next_node=-1, parent=node.parent)
-        for child_page in right.children:
-            child = self._read_node_at(f, schema_size, child_page)
-            child.parent = None 
-            child.parent = None
-            child.parent = None
         node.records = node.records[:mid]
         node.children = node.children[:mid + 1]
 

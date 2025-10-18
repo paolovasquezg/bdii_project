@@ -75,10 +75,20 @@ def backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
                 pass
 
     elif sec_kind == "rtree":
-
         records = get_physical_records(main, prim_kind, True)
 
-        # Create File instance to use its methods
+        try:
+            from pathlib import Path as _P
+            import os as _os
+            data_dir = _os.path.dirname(_os.path.dirname(sec_file))
+            idx_dir = _P(data_dir) / table
+            idx_path = idx_dir / f"{table}_rtree_{column}.idx"
+            map_path = idx_dir / f"{table}_rtree_{column}.map.json"
+            idx_path.unlink(missing_ok=True)
+            map_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
         file_inst = File(table)
         rt = file_inst._make_rtree(column, heap_ok=(prim_kind=="heap"), reuse_cached=True)
         if prim_kind == "heap":
@@ -119,7 +129,6 @@ def _filename_token(method: str) -> str:
     k = _canon_index_kind(method)
     if k == "bplus":
         return "bplus"
-    # las demás usan su nombre canónico
     return k
 
 
@@ -300,14 +309,17 @@ def create_index(table: str, column: str, method: str):
         return
     
     if "key" in relation[column] and relation[column]["key"] == "primary":
-        
         if method == "hash" or method == "rtree":
             return
-        
+
         mainfilename = indexes["primary"]["filename"]
         main_index = indexes["primary"]["index"]
-        
-        records = get_physical_records(mainfilename, main_index, False)
+
+        records = get_physical_records(mainfilename, main_index, True)
+
+        if main_index == "heap":
+            records = [row for (row, _pos) in records]
+
         table_desp = get_table_descp(relation, indexes)
         table_desp = add_index(table_desp, column, method)
 
@@ -316,6 +328,11 @@ def create_index(table: str, column: str, method: str):
 
         InsFile = File(table)
         InsFile.execute({"op": "build", "records": records})
+
+        try:
+            InsFile._close_cached_rtrees()
+        except Exception:
+            pass
     
     else:
         kind = _canon_index_kind(method)
@@ -363,11 +380,14 @@ def drop_index(table: Optional[str], column_or_name: Optional[str]):
     col = column_or_name
     
     if "key" in relation[col] and relation[col]["key"] == "primary":
-        
         mainfilename = indexes["primary"]["filename"]
         main_index = indexes["primary"]["index"]
-        
-        records = get_physical_records(mainfilename, main_index, False)
+
+        records = get_physical_records(mainfilename, main_index, True)
+  
+        if main_index == "heap":
+            records = [row for (row, _pos) in records]
+
         table_desp = get_table_descp(relation, indexes)
         table_desp = delete_index(table_desp, col)
 
@@ -376,6 +396,10 @@ def drop_index(table: Optional[str], column_or_name: Optional[str]):
 
         InsFile = File(table)
         InsFile.execute({"op": "build", "records": records})
+        try:
+            InsFile._close_cached_rtrees()
+        except Exception:
+            pass
 
     else:
         try:

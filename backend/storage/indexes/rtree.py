@@ -578,6 +578,80 @@ class RTree:
         self.read_count = self.rt.store.read_count
         self.write_count = self.rt.store.write_count
 
+        # Sidecar mapping for non-integer PK support: pk <-> int surrogate
+        self.mapfile = str(idx_dir / f"{table}_rtree_{column}.map.json")
+        self._p2i = {}
+        self._i2p = {}
+        self._next_id = 1
+        self._load_map()
+
+    # ---------- mapping helpers (non-int PK support) ----------
+    def _load_map(self):
+        import json
+        try:
+            if os.path.exists(self.mapfile):
+                with open(self.mapfile, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self._p2i = data.get("p2i", {}) or {}
+                self._i2p = data.get("i2p", {}) or {}
+                self._next_id = int(data.get("next_id", 1) or 1)
+        except Exception:
+            # tolerate corrupt map; start fresh (won't affect numeric PKs)
+            self._p2i, self._i2p, self._next_id = {}, {}, 1
+
+    def _save_map(self):
+        import json
+        try:
+            with open(self.mapfile, "w", encoding="utf-8") as f:
+                json.dump({
+                    "next_id": self._next_id,
+                    "p2i": self._p2i,
+                    "i2p": self._i2p,
+                }, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _pk_key(self, pk):
+        # Stable JSON string key for dicts; for scalars, str() is fine but we use json to handle types
+        import json
+        try:
+            return json.dumps(pk, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return str(pk)
+
+    def _pk_to_int(self, pk):
+        # If already int-like, return as int
+        try:
+            if isinstance(pk, bool):
+                # avoid True/False becoming 1/0 unintentionally for string PKs
+                raise ValueError()
+            if isinstance(pk, int):
+                return int(pk)
+        except Exception:
+            pass
+        k = self._pk_key(pk)
+        if k in self._p2i:
+            return int(self._p2i[k])
+        # assign new surrogate id
+        sid = int(self._next_id)
+        self._next_id = sid + 1
+        self._p2i[k] = sid
+        self._i2p[str(sid)] = k
+        self._save_map()
+        return sid
+
+    def _int_to_pk(self, sid):
+        # If mapping exists, return original PK (deserialize JSON); else assume sid is the real PK (numeric)
+        import json
+        sk = str(int(sid))
+        if sk in self._i2p:
+            v = self._i2p[sk]
+            try:
+                return json.loads(v)
+            except Exception:
+                return v
+        return int(sid)
+
     def close(self):
         """Cierra el archivo R-Tree subyacente (persiste el header con root/height actualizado)."""
         if DEBUG_IDX:
@@ -597,10 +671,13 @@ class RTree:
 
     # --- escritura ---
     def insert(self, record: dict):
-        # 'record' DEBE incluir 'pos' y opcionalmente 'slot'
-        # 'key' es la columna espacial (p.ej. "coords", "ubicacion", etc.)
+        # 'record' puede incluir 'pos' (heap) o 'pk' (no-heap)
+        # Si 'pk' es no entero, usamos un surrogate int y lo almacenamos en el árbol
         additional = {"key": self.key, "heap": self.heap_file}
-        return self.rt.insert(record, additional)
+        rec = dict(record)
+        if "pk" in rec and rec["pk"] is not None and not isinstance(rec["pk"], int):
+            rec["pk"] = self._pk_to_int(rec["pk"])  # map non-int pk to surrogate
+        return self.rt.insert(rec, additional)
 
     def remove(self, record: dict):
         """
@@ -635,10 +712,38 @@ class RTree:
 
     # --- lecturas ---
     def search_rect(self, xmin: float, xmax: float, ymin: float, ymax: float):
-        return self.rt.search({"rect": (xmin, xmax, ymin, ymax), "heap": self.heap_file})
+        items = self.rt.search({"rect": (xmin, xmax, ymin, ymax), "heap": self.heap_file})
+        # Map back surrogate ids to original PKs when not using heap
+        if not self.heap_file:
+            out = []
+            for it in (items or []):
+                if isinstance(it, dict) and "pos" in it and isinstance(it.get("pos"), int):
+                    it = dict(it)
+                    it["pos"] = self._int_to_pk(it["pos"])  # may return int (original) or non-int
+                out.append(it)
+            return out
+        return items
 
     def range(self, x: float, y: float, r: float):
-        return self.rt.range_search({"point": (x, y), "r": r, "heap": self.heap_file})
+        items = self.rt.range_search({"point": (x, y), "r": r, "heap": self.heap_file})
+        if not self.heap_file:
+            out = []
+            for it in (items or []):
+                if isinstance(it, dict) and "pos" in it and isinstance(it.get("pos"), int):
+                    it = dict(it)
+                    it["pos"] = self._int_to_pk(it["pos"])  # reverse map
+                out.append(it)
+            return out
+        return items
 
     def knn(self, x: float, y: float, k: int):
-        return self.rt.knn({"point": (x, y), "k": int(k), "heap": self.heap_file})
+        items = self.rt.knn({"point": (x, y), "k": int(k), "heap": self.heap_file})
+        if not self.heap_file:
+            out = []
+            for it in (items or []):
+                if isinstance(it, dict) and "pos" in it and isinstance(it.get("pos"), int):
+                    it = dict(it)
+                    it["pos"] = self._int_to_pk(it["pos"])  # reverse map
+                out.append(it)
+            return out
+        return items

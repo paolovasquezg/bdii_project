@@ -12,7 +12,6 @@ import os
 import copy
 
 DEBUG_IDX = os.getenv("BD2_DEBUG_INDEX", "0").lower() in ("1", "true", "yes")
-DEBUG_IDX = 1
 
 class File:
     # ------------------------------ helpers de catálogo ------------------------------ #
@@ -182,7 +181,8 @@ class File:
         if not mainidx or not mainfile:
             return []
 
-        pks = [it["pos"] for it in items if isinstance(it, dict) and isinstance(it.get("pos"), int)]
+        # Accept any PK type (int, str, etc.) - RTree wrapper may reverse-map surrogates
+        pks = [it["pos"] for it in items if isinstance(it, dict) and ("pos" in it)]
         if not pks:
             return []
 
