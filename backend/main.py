@@ -4,6 +4,8 @@ from backend.catalog.ddl import load_tables
 from backend.engine.engine import Engine
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.catalog.catalog import load_tables, get_json, table_meta_path
+
 app = FastAPI(title="DB2 Project")
 
 app.add_middleware(
@@ -25,10 +27,13 @@ def root():
 @app.get("/tables")
 def get_tables():
     tables_names = load_tables()
-    tables = []
+    tables = {}
 
     for table in tables_names:
-        tables.append(table)
+
+        meta = table_meta_path(table)
+        relation, indexes = get_json(str(meta),2)
+        tables[table] = {"relation": relation, "indexes": indexes}
 
     return tables
 
