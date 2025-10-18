@@ -57,7 +57,7 @@ def backfill_secondary(table: str, column: str, relation: dict, indexes: dict):
             else:
                 rec = {"pk": record[pk_name], column: record[column], "deleted": False}
             try:
-                h.insert(rec, key_name=column)
+                h.insert(rec, column)
             except Exception:
                 pass
 
