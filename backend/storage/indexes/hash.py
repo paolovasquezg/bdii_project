@@ -4,11 +4,11 @@ from backend.catalog.catalog import get_json
 from backend.core.utils import build_format
 
 
-BUCKET_SIZE = 3
+BUCKET_SIZE = 5
 HEADER_FORMAT = 'ii'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 INITIAL_MAX_CHAIN = 2
-MAX_GLOBAL_DEPTH = 20  # Directorio máximo: 2^10 = 1024 entradas
+MAX_GLOBAL_DEPTH = 20 
 
 # ================== Bucket ==================
 class Bucket:
@@ -174,7 +174,7 @@ class ExtendibleHashingFile:
             local_depth = struct.unpack('i', f.read(4))[0]
             overflow_page = struct.unpack('i', f.read(4))[0]
             data = f.read(self.bucket_disk_size)
-            self.read_count += 2
+            self.read_count += 1
             return Bucket.unpack(data, local_depth, overflow_page,
                                  self.record_size, self.format, self.schema)
 
