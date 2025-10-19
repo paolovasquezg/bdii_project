@@ -42,7 +42,7 @@ Cada archivo cumple una función específica dentro de la estructura del árbol:
 
 **Representación gráfica del proceso de inserción:**
 
-![Diagrama de inserción en el R-Tree](RtreeInsert.png)
+![Diagrama de inserción en el R-Tree](images/RtreeInsert.png)
 
 ---
 
@@ -68,7 +68,7 @@ Cada archivo cumple una función específica dentro de la estructura del árbol:
 
 **Representación gráfica del proceso de eliminación:**
 
-![Diagrama de eliminación en el R-Tree](RtreeRemove.png)
+![Diagrama de eliminación en el R-Tree](images/RtreeRemove.png)
 
 ---
 
