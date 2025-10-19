@@ -33,7 +33,7 @@ CREATE TABLE Restaurantes (
 
 ---
 
-### 🔍 Algoritmos principales implementados (con su complejidad)
+### 🔍 Algoritmos principales implementados 
 
 #### a. Inserción (`add`)
 1. Se calcula el **MBR** del nuevo elemento.  
