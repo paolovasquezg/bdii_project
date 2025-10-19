@@ -1,34 +1,32 @@
-# Informe Técnico: Análisis de la Implementación de Hashing Extensible
+# Análisis de la Implementación de Hashing Extensible
 
 ---
 
 ## 1.0 Introducción al Sistema de Hashing Extensible
 
-Este informe técnico presenta un análisis exhaustivo de la arquitectura y el funcionamiento de la clase `ExtendibleHashingFile`, una implementación en Python de la estructura de datos de hashing extensible diseñada para la gestión de archivos. La importancia estratégica de esta estructura radica en su capacidad para manejar de manera eficiente grandes volúmenes de datos que requieren inserciones y búsquedas dinámicas, adaptando su tamaño en disco de forma controlada para mantener un alto rendimiento. A diferencia de las estructuras de hash estáticas, el hashing extensible evita costosas reorganizaciones de todo el archivo a medida que los datos crecen.
+Éste índice está diseñado para la gestión de archivos. Su importancia radica en su capacidad para manejar de manera eficiente grandes volúmenes de datos que requieren inserciones y búsquedas dinámicas. El hashing extensible evita costosas reorganizaciones de todo el archivo a medida que los datos crecen.
 
-Los objetivos clave de este informe son:
+Los objetivos de este informe son:
 
 * Detallar la estructura física del archivo en disco, desde la cabecera hasta las páginas de datos.
 * Analizar los componentes lógicos que se gestionan en memoria, como el directorio de hash y los buckets.
 * Desglosar la lógica de las operaciones fundamentales (inserción, búsqueda y eliminación) y los mecanismos de desbordamiento y división de páginas que garantizan la escalabilidad del sistema.
 
-Este documento procederá a desglosar primero la arquitectura general del sistema, sentando las bases para un análisis más profundo de sus operaciones y mecanismos internos.
+## 2.0 Componentes Fundamentales
 
-## 2.0 Arquitectura General y Componentes Fundamentales
-
-La implementación se basa en una arquitectura de alto nivel compuesta por dos clases principales: `ExtendibleHashingFile` y `Bucket`. Esta separación de responsabilidades es fundamental para comprender el funcionamiento del sistema, donde una clase actúa como el orquestador y la otra como la unidad de almacenamiento de datos.
+Se implementan dos clases principales: `ExtendibleHashingFile` y `Bucket`. La primera clase actúa como el orquestador, mientras que la segunda como la unidad de almacenamiento de datos.
 
 La clase `ExtendibleHashingFile` es el orquestador principal del sistema. Es responsable de gestionar el directorio de hash, una estructura en memoria que mapea los valores de hash a punteros de página en el archivo. Además, mantiene el estado global del archivo, incluyendo la profundidad global (`global_depth`), que determina el tamaño del directorio, y el índice de la próxima página disponible (`next_page_idx`). Esta clase coordina todas las operaciones de lectura y escritura en el archivo físico en disco, actuando como la interfaz principal para interactuar con los datos.
 
 Por otro lado, la clase `Bucket` representa una página de datos en el archivo. Cada bucket está diseñado para contener un número fijo de registros (`BUCKET_SIZE`). Posee dos atributos clave para la lógica del hashing extensible: su profundidad local (`local_depth`), que indica cuántos bits del hash son significativos para ese bucket en particular, y un puntero a una página de desbordamiento (`overflow_page`), que permite encadenar buckets para manejar colisiones de hash.
 
-La configuración del sistema se define mediante un conjunto de constantes clave que dictan su comportamiento y sus límites teóricos.
+En esta tabla realizamos la configuración del sistema y se define mediante un conjunto de constantes que dictan su comportamiento y sus límites teóricos.
 
-| Constante | Valor (del código) | Descripción |
-| :--- | :--- | :--- |
-| `BUCKET_SIZE` | 5 | Define la capacidad máxima de registros que puede contener un único bucket. Un valor bajo provocará divisiones y desbordamientos más frecuentes, mientras que un valor alto puede desperdiciar espacio en disco si los buckets no se llenan por completo. Es un parámetro crítico para el equilibrio entre rendimiento y uso de espacio. |
+| Constante | Valor (del código) | Descripción                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| :--- | :--- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `BUCKET_SIZE` | 5 | Capacidad máxima de registros que puede contener un único bucket (no tiene que ser ni pequeño ni grande).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `INITIAL_MAX_CHAIN` | 2 (base) | Establece un valor base para un cálculo dinámico de la longitud máxima de la cadena de desbordamiento, determinada por el método `_max_chain_length()`, que retorna `INITIAL_MAX_CHAIN + self.global_depth`. Esta estrategia de "encadenamiento limitado" es una optimización de rendimiento crucial: actúa como una heurística para diferir la costosa operación de división (`_split`), balanceando el costo de búsquedas lineales en cadenas cortas contra el costo de una reorganización a nivel de archivo. A medida que el directorio crece, el sistema se vuelve más tolerante a cadenas largas, ponderando el creciente costo de una división contra el de escanear un eslabón adicional. |
-| `MAX_GLOBAL_DEPTH` | 20 | Impone un límite superior al tamaño del directorio, que no puede exceder $2^{20}$ entradas. Este valor previene un crecimiento infinito del directorio y, en consecuencia, define la capacidad teórica máxima del archivo. |
+| `MAX_GLOBAL_DEPTH` | 20 | Impone un límite superior al tamaño del directorio, que no puede exceder $2^{20}$ entradas.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Con una comprensión clara de estos componentes fundamentales, podemos ahora examinar cómo se organizan y persisten en la estructura física del archivo en disco.
 
@@ -71,13 +69,13 @@ En esta implementación, no se define un "factor de carga" numérico (como 75% u
 ---
 
 Estos dos límites (`BUCKET_SIZE` y `_max_chain_length`) son los mecanismos clave que controlan la carga y el crecimiento de la estructura `ExtendibleHashingFile`.
-## 4.0 Análisis Detallado de las Operaciones
+## 4.0 Análisis de las Operaciones
 
 Las operaciones fundamentales de `ExtendibleHashingFile` —inserción, búsqueda y eliminación— se basan en la interacción coordinada entre el directorio en memoria, los buckets en disco y los mecanismos de desbordamiento. Esta sección desglosa la lógica subyacente de cada una de estas operaciones.
 
 ### 4.1 Operación de Inserción (insert)
 
-El proceso de inserción es el más complejo, ya que puede desencadenar reorganizaciones estructurales del archivo. Sigue un algoritmo de decisión de varios pasos para colocar un nuevo registro:
+El proceso de inserción es el más complejo, ya que puede desencadenar reorganizaciones estructurales del archivo:
 
 1.  **Cálculo del Índice y Lectura de Cadena:** Primero, se calcula el índice del directorio (`_get_bucket_idx`) aplicando una máscara de bits (definida por `global_depth`) al hash de la clave del registro. Luego, se lee la cadena completa de buckets asociada a ese índice, incluyendo el bucket principal y todos sus buckets de desbordamiento (`_read_chain`).
 2.  **Intento de Inserción Directa:** El sistema recorre la cadena de buckets leída. Si encuentra un bucket que no está lleno (`is_full`), inserta el nuevo registro en él, reescribe el bucket modificado en el disco y la operación finaliza con éxito.
@@ -86,7 +84,9 @@ El proceso de inserción es el más complejo, ya que puede desencadenar reorgani
 5.  **Activación de la División (Splitting):** Si la cadena está llena, ha alcanzado su longitud máxima y la división es productiva, se activa la lógica de división (`_split`) para reorganizar los registros y, potencialmente, el directorio.
 6.  **Reintento de Inserción Post-División:** Una vez completada la división, que redistribuye los registros de la cadena original, el sistema recalcula el índice del bucket para el registro a insertar y reintenta la inserción.
 7.  **Fallback a Chaining:** En el caso excepcional de que la división no libere espacio en la cadena de destino (por ejemplo, debido a una mala distribución de los valores de hash), el sistema recurre como último recurso a añadir un nuevo eslabón a la cadena, excediendo temporalmente el límite de `_max_chain_length` para garantizar que la inserción se complete.
+
 ![img_2.png](img_2.png)
+
 ![img_3.png](img_3.png)
 ### 4.2 Operación de Búsqueda (find)
 
@@ -96,7 +96,9 @@ La búsqueda de un registro es un proceso directo que aprovecha la estructura de
 2.  **Identificación de la Página Inicial:** Se utiliza el índice para obtener el puntero a la página inicial desde el directorio en memoria (`self.directory`).
 3.  **Recorrido de la Cadena de Desbordamiento:** El método `_read_chain` se invoca para leer secuencialmente el bucket principal y todos los buckets de desbordamiento enlazados a él.
 4.  **Búsqueda Lineal dentro de los Buckets:** Se realiza una búsqueda lineal dentro de la lista de registros de cada bucket de la cadena. Se devuelven todos los registros que coinciden con el `key_value` proporcionado, asegurándose de excluir aquellos que puedan estar marcados como eliminados (`deleted`).
+
 ![img.png](img.png)
+
 ![img_1.png](img_1.png)
 
 Debido a que B y c son conocidos, se consideran como constantes O(1).
@@ -129,6 +131,7 @@ Una vez que se asegura que el directorio tiene la granularidad necesaria, el pro
 **Ventajas y desventajas de realizar split**
 ![img_8.png](img_8.png)
 **Análisis de Rendimiento:** Esta estrategia de reinserción recursiva, si bien simplifica la lógica de redistribución, nos introduce una sobrecarga de rendimiento. Cada llamada a `insert` repite el proceso de búsqueda de la cadena de buckets correcta, y en escenarios de datos con mala distribución de hash, podría teóricamente conducir a divisiones en cascada. 
+
 **Debilidades de la implementación:** Aunque el algoritmo implementado puede crecer, un de sus deventajas es que dejamos espacios libre al momento de eliminar un registro. Y si tenemos 100 registros y eliminamos 95% de ellos igual va quedar muchos buckets libres. Lo que podríamos mejorar sería es establecer un mínimo y cuando existan buckets semivacíos realizar la unión de bucktes. Esto garantizaría crecer(ahora lo hacemos) y decrecer(para una próxima presentación).
 
 **Resumen de tiempos de los métodos insert, delete, find**
