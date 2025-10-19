@@ -1,15 +1,5 @@
-## 🧱 Técnica de Indexación: R-Tree
-
-### 📌 1. Introducción al índice R-Tree
-El **R-Tree (Rectangle Tree)** es una estructura jerárquica de indexación espacial diseñada para organizar **datos multidimensionales** (por ejemplo, coordenadas geográficas, polígonos o regiones).  
-A diferencia de los índices tradicionales basados en valores escalares (como el B+Tree o el ISAM), el R-Tree agrupa **objetos por su localización y extensión en el espacio**, utilizando **rectángulos mínimos contenedores** (*MBR — Minimum Bounding Rectangles*).
-
-Cada nodo del árbol representa un conjunto de objetos o subregiones del espacio. De esta manera, el R-Tree permite ejecutar operaciones de búsqueda **por rango** y **por proximidad** sin explorar todos los registros, reduciendo el número de accesos a disco.
-
----
-
-### ⚙️ 2. Implementación en el proyecto
-El módulo del R-Tree se encuentra dentro de la carpeta:
+### ⚙️ Implementación en el proyecto
+El módulo del **R-Tree** se encuentra dentro de la carpeta:
 
 ```
 indexes/rtree/
@@ -22,17 +12,17 @@ indexes/rtree/
 
 Cada archivo cumple un rol específico:
 
-| Archivo | Función principal |
-|----------|------------------|
-| **RTree.py** | Implementa la clase `RTree`, que gestiona la raíz, las inserciones y las búsquedas por rango y k-NN. Controla las divisiones (*splits*) y el crecimiento del árbol. |
-| **node.py** | Define la clase `Node`, que representa un nodo del árbol (hoja o interno). Mantiene las entradas y los límites de cada MBR. |
-| **mbr.py** | Define la clase `MBR`, encargada de los cálculos geométricos: intersecciones, uniones y área de expansión. |
-| **metrics.py** | Contiene funciones para medir distancia euclidiana y determinar el MBR más adecuado para inserciones. |
-| **storage.py** | Administra la serialización de los nodos en disco, simulando la persistencia del índice espacial. |
+| Archivo | Descripción |
+|----------|-------------|
+| **RTree.py** | Clase principal `RTree`: gestiona la raíz, inserciones, divisiones (*splits*), y búsquedas (por rango y k-NN). |
+| **node.py** | Clase `Node`: representa los nodos del árbol (internos o hojas) y almacena referencias a los MBRs hijos. |
+| **mbr.py** | Clase `MBR`: define las operaciones geométricas (intersección, unión, expansión y cálculo de área). |
+| **metrics.py** | Contiene funciones para medir distancias y determinar el mejor nodo donde insertar un nuevo elemento. |
+| **storage.py** | Gestiona la persistencia de los nodos en disco, simulando la estructura de almacenamiento físico. |
 
-El R-Tree se integra al mini-gestor mediante los módulos `File.py` y `TableCreate.py`, que reconocen el tipo de índice especificado en el esquema de la tabla.
+El índice se integra con el motor del proyecto mediante los módulos `File.py` y `TableCreate.py`, que reconocen el tipo de índice declarado en la creación de tablas.  
+Ejemplo:
 
-Ejemplo de uso en SQL:
 ```sql
 CREATE TABLE Restaurantes (
     id INT KEY INDEX SEQ,
@@ -43,55 +33,51 @@ CREATE TABLE Restaurantes (
 
 ---
 
-### 🔍 3. Algoritmos principales implementados
+### 🔍 Algoritmos principales implementados (con su complejidad)
 
 #### a. Inserción (`add`)
-1. Se calcula el **MBR** del nuevo objeto (por ejemplo, una coordenada o un rectángulo).  
-2. Se selecciona recursivamente el nodo cuyo MBR **requiera menor aumento de área** para incluir el nuevo objeto (*mínimo enlargement*).  
-3. Si el nodo se desborda (supera su capacidad `M`), se aplica un **split cuadrático**, dividiendo las entradas en dos nodos con solapamiento mínimo.  
-4. Se actualizan los MBR de todos los nodos ascendentes hasta la raíz.
+1. Se calcula el **MBR** del nuevo elemento.  
+2. Se selecciona el nodo cuyo MBR necesite **menor aumento de área** (*enlargement mínimo*).  
+3. Si el nodo se desborda, se ejecuta un **split cuadrático** para dividir el conjunto de entradas.  
+4. Se actualizan los MBR de los nodos ancestros hasta la raíz.
+
+**Complejidad:**  
+- Búsqueda de nodo adecuado: `O(log_M n)`  
+- Inserción y actualización de MBR: `O(1)`  
+- Split (en caso de overflow): `O(M²)`  
+> Complejidad promedio total: **O(log_M n)**  
+> Complejidad en el peor caso: **O(M²)** (por splits repetidos).
+
+---
 
 #### b. Búsqueda por rango (`rangeSearch(point, radius)`)
-1. Se construye un **MBR de búsqueda** a partir del punto y el radio dado.  
-2. Se recorren los nodos cuyos MBR **intersecten** el MBR de búsqueda.  
-3. En los nodos hoja, se devuelven todos los objetos contenidos o parcialmente contenidos en esa región.
+1. Se genera un **MBR de consulta** a partir del punto y el radio.  
+2. Se recorren todos los nodos cuyos MBR **intersecten** el MBR de búsqueda.  
+3. En nodos hoja, se devuelven los objetos dentro del rango.
+
+**Complejidad:**  
+- Promedio: `O(log_M n + k)`  
+- Peor caso: `O(n)` (si todos los MBR se solapan o cubren todo el espacio).
+
+---
 
 #### c. Búsqueda de vecinos cercanos (`rangeSearch(point, k)`)
 1. Se calcula la distancia del punto de consulta a cada MBR.  
-2. Se mantiene una cola prioritaria ordenada por distancia.  
-3. Se recorren los nodos más prometedores primero, devolviendo los **k registros más próximos**.
+2. Se usa una **cola de prioridad** (min-heap) para expandir los nodos más cercanos primero.  
+3. Se devuelven los **k elementos** más próximos.
+
+**Complejidad:**  
+- Construcción del heap: `O(n log k)`  
+- Promedio (espacialmente balanceado): `O(log_M n + k log k)`.
 
 ---
 
-### 🧠 4. Validación y pruebas (“de esquina a esquina”)
-Durante la fase de pruebas (`Testing.py`), se validó el correcto funcionamiento del R-Tree con consultas **de esquina a esquina**, es decir, búsquedas donde el MBR de consulta abarca todo el espacio (desde las coordenadas mínimas hasta las máximas).
+### ⚖️ Tabla comparativa de métodos y complejidades
 
-Este tipo de prueba garantiza que:
-- La función `intersects()` de los MBR detecta correctamente objetos **ubicados en los bordes**.  
-- El recorrido del árbol es completo y no omite regiones del espacio.  
-- La estructura mantiene su integridad tras múltiples inserciones y splits.
-
-Ejemplo de prueba:
-```python
-query_mbr = MBR(0, 0, 100, 100)
-resultados = rtree.range_search(query_mbr)
-```
-
-Resultado esperado: el método devuelve **todos los puntos** del dominio, confirmando que los límites espaciales están correctamente manejados.
-
----
-
-### ⚖️ 5. Comparación teórica
-| Técnica | Tipo de datos | Ventaja principal | Limitación |
-|----------|---------------|------------------|-------------|
-| **Sequential / ISAM / B+Tree** | Unidimensional (números, texto) | Accesos rápidos para rangos ordenados | No manejan relaciones espaciales |
-| **R-Tree** | Multidimensional (coordenadas, regiones) | Agrupación espacial, consultas por intersección y k-NN | Solapamiento entre nodos puede degradar rendimiento |
-
-El R-Tree es, por tanto, la técnica más adecuada para **datos espaciales** dentro del sistema, complementando a los otros índices tradicionales que gestionan datos escalares.
-
----
-
-### 🧩 6. Conclusión
-El módulo **R-Tree** implementado proporciona un mecanismo eficiente para indexar y consultar datos espaciales dentro del mini-gestor de base de datos.  
-Su integración con el motor de tablas permite realizar operaciones de búsqueda por rango y vecinos cercanos sobre campos multidimensionales, cumpliendo con los objetivos del Proyecto 1.  
-Además, esta base servirá para futuras extensiones del sistema hacia la **indexación geoespacial y multimodal** en la segunda fase del curso.
+| Operación | Descripción | Complejidad promedio | Complejidad peor caso |
+|------------|--------------|----------------------|-----------------------|
+| **add()** | Inserta un nuevo registro en el árbol, actualizando los MBR. | O(log_M n) | O(M²) |
+| **rangeSearch(point, radius)** | Devuelve los objetos dentro de un rango espacial. | O(log_M n + k) | O(n) |
+| **rangeSearch(point, k)** | Devuelve los k elementos más cercanos al punto. | O(log_M n + k log k) | O(n log k) |
+| **split()** | Divide un nodo lleno en dos, minimizando solapamiento. | O(M²) | O(M²) |
+| **updateMBR()** | Ajusta los MBR ascendentes tras una inserción. | O(log_M n) | O(log_M n) |
