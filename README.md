@@ -303,9 +303,50 @@ Complejidad:
 
 ### d. Extendible Hashing
 
-*(completar)*
+### R-Tree
 
-Ver: `backend/storage/indexes/hash.py`.
+El **R-Tree** es un índice espacial jerárquico que organiza datos multidimensionales mediante **MBRs** (Minimum Bounding Rectangles). Cada nodo almacena M entradas como máximo, y los nodos internos representan rectángulos que engloban a sus hijos.  Su estructura permite realizar búsquedas espaciales eficientes (punto, rango, kNN) evitando recorrer todo el conjunto de datos.
+
+Ver: `backend/storage/indexes/rtree.py`.
+
+#### Insert
+- Se selecciona la hoja cuya expansión de MBR sea mínima.  
+- Si el nodo se llena, se realiza un **split cuadrático** y se actualizan los MBR hacia la raíz.  
+- **Complejidad promedio:** O(logₘ n)  
+- **Peor caso:** O(n/M) (si ocurren múltiples splits).
+
+#### Search
+- Recorre solo los nodos cuyos MBR contienen el punto consultado.  
+- **Complejidad promedio:** O(logₘ n)  
+- **Peor caso:** O(n/M) (si hay solapamiento y se deben explorar muchas ramas).
+
+#### Range Search
+- Explora los nodos cuyos MBR intersectan el área consultada y filtra registros en hojas.  
+- **Complejidad promedio:** O(logₘ n + k)  
+- **Peor caso:** O(n/M + k) (si la región cubre casi todos los nodos o hay solapamiento extremo).
+
+#### Remove
+- Localiza la hoja y elimina el registro.  
+- Si el nodo queda por debajo del mínimo, se redistribuye o reinserta contenido.  
+- **Complejidad promedio:** O(logₘ n)  
+- **Peor caso:** O(n/M) (si hay reinserciones masivas o recorridos múltiples).
+
+#### KNN
+- Utiliza una **cola de prioridad** para explorar nodos ordenados por distancia mínima al punto.  
+- **Complejidad promedio:** O(logₘ n + k log k)  
+- **Peor caso:** O(n/M + k log k) (si no se puede podar ninguna rama).
+
+---
+
+### Tabla resumen
+
+| Operación         | Explicación breve                                                                                          | Caso promedio               | Peor caso                    |
+|-------------------|-------------------------------------------------------------------------------------------------------------|-----------------------------|------------------------------|
+| **Insert**        | Inserta un nuevo registro, ajusta MBRs y divide nodos si hay overflow.                                     | O(logₘ n)                   | O(n/M)                       |
+| **Search**        | Busca un punto exacto recorriendo solo MBRs relevantes.                                                    | O(logₘ n)                   | O(n/M)                       |
+| **Range Search**  | Busca registros dentro de un área, explorando solo nodos intersectados.                                    | O(logₘ n + k)              | O(n/M + k)                   |
+| **Remove**        | Elimina el registro y reorganiza nodos si es necesario.                                                   | O(logₘ n)                   | O(n/M)                       |
+| **KNN**           | Busca los k vecinos más cercanos usando poda espacial y cola de prioridad.                                 | O(logₘ n + k log k)        | O(n/M + k log k)            |
 
 ---
 
