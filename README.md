@@ -40,7 +40,7 @@ La estructura de los archivos del programa se puede entender como un **árbol n-
 - **2do nivel (tablas base):** Guardan el *schema* de los registros, y la relación entre los índices creados y los archivos respectivos. Por defecto, si no se indica un índice sobre la llave primaria, se usa como mínimo un **Heap**.  
 - **3er nivel (tablas indexadas):** Guardan en sí los datos físicos. Cada una de estas guarda primeramente el esquema de los datos que están guardando, y luego en sí la data. Dependiendo si son índices agrupados o no agrupados, guardan un esquema diferente.
 
-![Estructura de archivos](images/imagen1.png)
+![Estructura de archivos](images/1_structure.png)
 
 Por ejemplo, si solo hubiéramos creado la tabla:
 
@@ -56,7 +56,7 @@ CREATE TABLE lugares (
 
 La estructura del árbol se vería como:
 
-![Árbol de ejemplo](images/imagen2.png)
+![Árbol de ejemplo](images/2_org.png)
 
 Puedes revisar `backend/catalog/ddl.py` para mayor detalle.
 
