@@ -431,11 +431,11 @@ Diseñado para datos espaciales (2D, 3D), no para datos lineales.
 
 Se revisará el frontend de la aplicación. La interfaz se ve como en la siguiente imagen:
 
-![Frontend interfaz](images/imagen7.png)
+![Frontend interfaz](images/interfaz.png)
 
 En la parte izquierda se muestran las tablas creadas con sus atributos e índices. Se deja un espacio para escribir secuencias SQL y un botón para ejecutarlas. Debajo se muestra la data, y cada vez que se ejecuta una operación se muestra la información de escritura y lectura, además del planificador, como se ve en la siguiente imagen:
 
-![Frontend planificador](images/imagen8.png)
+![Frontend planificador](images/planificador.png)
 
 ---
 
