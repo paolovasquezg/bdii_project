@@ -657,7 +657,106 @@ Diseñado para datos espaciales (2D, 3D), no para datos lineales.
 
 # Resultados: Mediciones y experimentos
 
-*(completar)*
+perfecto—acá tienes un **resumen breve y pegable** (con tablas) de tu última corrida `bench_primsec_20251019_235527.csv`. Usa esto tal cual en tu informe.
+
+---
+
+# Informe breve de experimentación (PK, secundarios y espacial)
+
+**Setup.** ~1K filas (products). Primarios: `heap`, `sequential`, `isam`, `bplus`.
+Secundarios: `name` (`hash`, `bplus`), `price` (`bplus`). Espacial: `coords` con **R-Tree** (kNN, k=10).
+
+## 1) Inserción por organización primaria
+
+| primary    | time_mean (ms) |   io_total | nota                     |
+| ---------- | -------------: | ---------: | ------------------------ |
+| **isam**   |      **66.19** |      1,568 | mejor tiempo             |
+| bplus      |         112.55 |      1,649 |                          |
+| sequential |          80.25 |      4,164 |                          |
+| **heap**   |         134.32 | **10,200** | IO inflado en import (*) |
+
+* *En teoría `heap` debería ser barato de insertar; ese IO alto sugiere que la métrica está contando lecturas adicionales del proceso de carga.*
+
+## 2) Búsqueda puntual por PK (=`=`)
+
+| primary        | runs | time_mean (ms) | p90 (ms) | io_total |
+| -------------- | ---: | -------------: | -------: | -------: |
+| **sequential** |  100 |      **0.384** |    0.413 |     7.72 |
+| bplus          |  100 |          0.604 |    0.621 | **6.99** |
+| isam           |  100 |          0.619 |    0.764 |     9.80 |
+| heap           |  100 |          0.910 |    1.259 |    58.25 |
+
+**Lectura:** `sequential` es el más rápido en tiempo; `bplus` usa menos IO. `heap` queda claramente atrás.
+
+## 3) Búsqueda por rango en PK (`between`)
+
+| primary        | runs | time_mean (ms) | p90 (ms) | io_total |
+| -------------- | ---: | -------------: | -------: | -------: |
+| **sequential** |   20 |      **1.326** |    1.363 |    103.0 |
+| isam           |   20 |          1.368 |    1.395 | **34.0** |
+| heap           |   20 |          1.495 |    1.690 |    101.0 |
+| bplus          |   20 |          2.403 |    2.955 |     55.0 |
+
+**Lectura:** `sequential` gana en tiempo; `isam` hace menos IO. `bplus` es el más lento en rango de PK.
+
+## 4) Secundarios en `name` (igualdad)
+
+### Por primario y método
+
+| primary    | secondary | runs | time_mean (ms) | io_total | io_data | io_index |
+| ---------- | --------- | ---: | -------------: | -------: | ------: | -------: |
+| heap       | **bplus** |  100 |      **0.771** |     8.33 |    2.28 |     6.05 |
+| heap       | hash      |  100 |          0.825 |     8.09 |    2.09 |     6.00 |
+| sequential | hash      |  100 |          1.095 |    22.35 |   16.11 |     6.24 |
+| sequential | bplus     |  100 |          1.175 |    25.03 |   19.08 |     5.95 |
+| bplus      | bplus     |  100 |          1.595 |    20.54 |   14.49 |     6.05 |
+| bplus      | hash      |  100 |          1.672 |    21.13 |   15.13 |     6.00 |
+| isam       | hash      |  100 |          6.579 |   139.69 |  131.54 |     8.15 |
+| isam       | bplus     |  100 |          7.188 |   150.96 |  142.22 |     8.74 |
+
+### Agregado por método
+
+| secondary | runs | time_mean (ms) | p90 (ms) | io_total |
+| --------- | ---: | -------------: | -------: | -------: |
+| **hash**  |  400 |      **2.543** |    6.557 |    47.82 |
+| bplus     |  400 |          2.682 |    7.122 |    51.22 |
+
+**Lectura:** para igualdad, **hash** y **bplus** rinden muy parecido (hash levemente mejor en tiempo). El **primario** domina el costo de fetch de datos (ver `isam`).
+
+## 5) Secundarios en `price` (rango, B+)
+
+| primary    | runs | time_mean (ms) | p90 (ms) |   io_data |  io_index |
+| ---------- | ---: | -------------: | -------: | --------: | --------: |
+| **heap**   |   20 |      **0.838** |    0.944 |      5.15 |     11.35 |
+| sequential |   20 |          3.055 |    5.732 |     85.30 |     12.95 |
+| bplus      |   20 |          4.766 |   11.206 | **76.80** |      0.00 |
+| isam       |   20 |          4.840 |    8.636 |     92.10 | **22.70** |
+
+**Lectura:** en rangos por secundario, el costo lo marca el **acceso al archivo de datos**; con `heap` primario resulta más rápido traer los RIDs.
+
+## 6) Espacial: `coords` con R-Tree (kNN, k=10)
+
+| primary    | runs | time_mean (ms) | p90 (ms) |
+| ---------- | ---: | -------------: | -------: |
+| **bplus**  |   20 |      **0.075** |    0.078 |
+| heap       |   20 |          0.077 |    0.084 |
+| sequential |   20 |          0.081 |    0.099 |
+| isam       |   20 |          0.089 |    0.103 |
+
+**Lectura rápida:** kNN ~0.08 ms y **muy estable** para todos los primarios → el costo está en el **R-Tree** y el fetch de unos pocos RIDs.
+**Nota técnica:** los contadores de IO para kNN aparecen en 0 y `index_usage` sale `nan`; es un **gap de instrumentación** (el engine no está reportando IO/plan aquí aunque el operador R-Tree se ejecuta).
+
+---
+
+## Conclusiones 
+
+* **PK puntual:** `sequential` es el más rápido; `bplus` usa menos IO.
+* **PK rango:** `sequential` en tiempo, `isam` en IO.
+* **`name` (=):** `hash` ≈ `bplus`; elegir **hash** si solo hay igualdad, **bplus** si también habrá rangos.
+* **`price` (rango):** el primario manda; con `heap` el fetch es más barato.
+* **R-Tree (kNN):** ~0.08 ms; resultados coherentes con búsqueda espacial eficiente. Falta instrumentación de IO/plan en kNN.
+
+
 
 ---
 
