@@ -24,6 +24,33 @@ Esto construirá las imágenes y levantará ambos servicios:
 
 # Funcionamiento: Técnicas utilizadas e índices
 
+
+Primeramente, describiremos el flujo del proyecto:
+
+
+![Flujo del proyecto](images/flujo.png)
+
+**Idea clave:** *SQL → AST → Plan Físico → Iterador → Output*.
+
+* **Query (SQL)**: la app envía una sentencia como texto.
+* **ENGINE**
+
+  * **Parser**: convierte el SQL en un **AST** (árbol de sintaxis) por sentencia.
+  * **Planner/Optimizer**: a partir del AST arma el **plan físico**. Usa **Catálogo/Estadísticas** para:
+
+    * empujar filtros/proyecciones,
+    * elegir **caminos de acceso** (IndexScan vs SeqScan),
+    * decidir operadores (scan, join, sort, agg, limit).
+  * **Executor**: ejecuta el plan en **modelo iterador** (`open/next/close`). Va pidiendo filas hacia abajo y devolviendo resultados hacia arriba.
+* **Access Methods**: implementan los accesos de bajo nivel:
+
+  * **IndexScan** (B+Tree / Extensible Hash / R-Tree / ISAM),
+  * **Sequential/Heap Scan** cuando no hay índice útil.
+* **Storage / Files**: gestiona **páginas y registros**, traduce RIDs y hace **I/O en disco** (Heap, Sequential, ISAM).
+* **Output**: devuelve filas/JSON al cliente.
+* **Catálogo & Stats (transversal)**: esquemas, tipos, PK/índices, #filas, min/max, NDV. Son consultados por Parser/Planner/Executor.
+
+
 Se pretende revisar un poco el funcionamiento de la aplicación y las técnicas implementadas. Se hace una revisión específicamente al **backend** de la aplicación, y su aspecto teórico.
 
 ---
@@ -559,7 +586,18 @@ Diseñado para datos espaciales (2D, 3D), no para datos lineales.
 
 ## 5. Parser SQL
 
-*(completar)*
+**Objetivo:** transformar SQL en una representación serializable que el Planner pueda usar.
+
+![Pipeline del Parser](images/parser.png)
+**SQL → Tokens → AST → API → Diccionario**
+
+* **Tokens**: palabras clave (CREATE, SELECT, WHERE, BETWEEN, IN, KNN, POINT…), identificadores, números/strings, operadores (`= != <> < <= > >= ( ) , ;`).
+* **AST (dataclasses)**: un nodo por sentencia/expresión.
+
+  * **DDL**: `CREATE TABLE` (tipos, `PRIMARY KEY [USING]`, índices inline), `CREATE/DROP INDEX`, `DROP TABLE`.
+  * **DML**: `INSERT … VALUES`, `INSERT … FROM FILE`, `SELECT … [WHERE]`, `DELETE … [WHERE]`.
+  * **Predicados en WHERE**: comparaciones, `BETWEEN`, `IN (lista)`, **geo** `IN(POINT(x,y), r)`, **KNN** `KNN(POINT(x,y), k)`, paréntesis con **precedencia** `AND > OR`.
+* **API**: `SQLParser.parse(sql) → [Stmt]`; cada `Stmt.to_dict()` produce un **diccionario** (lista de sentencias serializables) que consume el Planner.
 
 ---
 

@@ -51,7 +51,7 @@ def HeapTest():
     }
     range_result = file.execute(range_params)
     print("Heap range search result for product_id 1-4:", range_result)
-    shutil.rmtree("../runtime/files", ignore_errors=True)
+    shutil.rmtree("../../runtime/files", ignore_errors=True)
 
 
 def SeqTest():
@@ -153,7 +153,7 @@ def SeqTest():
     result = file.execute(delete_by_price)
     print("Delete by price result:", result)
 
-    shutil.rmtree("../runtime/files", ignore_errors=True)
+    shutil.rmtree("../../runtime/files", ignore_errors=True)
 
 
 def IsamTest():
@@ -291,7 +291,7 @@ def IsamTest():
     result_range_deleted_name = file.execute(range_deleted_name_params)
     print("Range search result for product_id 28-44 after name deletes:", result_range_deleted_name)
 
-    shutil.rmtree("../runtime/files", ignore_errors=True)
+    shutil.rmtree("../../runtime/files", ignore_errors=True)
 
 if __name__ == "__main__":
     IsamTest()
