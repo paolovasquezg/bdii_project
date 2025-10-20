@@ -417,6 +417,8 @@ Ver: `backend/storage/indexes/rtree.py`.
 - **Complejidad promedio:** O(logₘ n)  
 - **Peor caso:** O(n/M) (si hay solapamiento y se deben explorar muchas ramas).
 
+![img_1.png](hash_search.png)
+
 #### Range Search
 - Explora los nodos cuyos MBR intersectan el área consultada y filtra registros en hojas.  
 - **Complejidad promedio:** O(logₘ n + k)  
