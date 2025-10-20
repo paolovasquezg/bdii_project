@@ -903,3 +903,5 @@ SELECT * FROM puntos
 # Video: Explicación y detalles
 
 Se anexa un video con una explicación integral de la aplicación, su funcionamiento e índices.
+
+- Enlace al video: [Video final](https://drive.google.com/file/d/17PdOK3qfdElZ5OPza__eFwPPeCJmAWMT/view?usp=drive_link)
