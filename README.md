@@ -162,7 +162,7 @@ A continuación se analiza la implementación de cada índice y su complejidad e
 
 El índice **Heap** es agrupado y guarda los registros secuencialmente al final del archivo. Permite que los índices no agrupados guarden la **posición física** de los registros. No se reconstruye ni cambia.
 
-![Heap](images/imagen3.png)
+![Heap](images/3_heap.png)
 
 Ver: `backend/storage/indexes/heap.py`.
 
@@ -197,7 +197,7 @@ Ver: `backend/storage/indexes/heap.py`.
 
 Este índice, agrupado, guarda la data secuencialmente ordenada en un primer espacio, y luego tiene un espacio adicional para los registros adicionales. Tomemos que la cantidad de registros en el espacio ordenado es **n**, y en el espacio adicional es **k = log(n)**, ya que si excede este tamaño el sequential se reconstruye. Sigue la estructura de la imagen. Ver: `backend/storage/indexes/sequential.py`.
 
-![Sequential](images/imagen4.png)
+![Sequential](images/4_seq.png)
 
 #### Insert
 
@@ -236,7 +236,7 @@ Definiciones:
 - **M**: factor de índice (máx. índices por página de índices)  
 - **K**: factor de página (máx. elementos por página de datos)
 
-![ISAM](images/imagen5.png)
+![ISAM](images/5_isam.png)
 
 Ver: `backend/storage/indexes/isam.py`.
 
