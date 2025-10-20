@@ -748,13 +748,40 @@ Secundarios: `name` (`hash`, `bplus`), `price` (`bplus`). Espacial: `coords` con
 
 ---
 
-## Conclusiones 
+## Conclusiones en 4 líneas
 
 * **PK puntual:** `sequential` es el más rápido; `bplus` usa menos IO.
 * **PK rango:** `sequential` en tiempo, `isam` en IO.
 * **`name` (=):** `hash` ≈ `bplus`; elegir **hash** si solo hay igualdad, **bplus** si también habrá rangos.
 * **`price` (rango):** el primario manda; con `heap` el fetch es más barato.
 * **R-Tree (kNN):** ~0.08 ms; resultados coherentes con búsqueda espacial eficiente. Falta instrumentación de IO/plan en kNN.
+
+## Inserción (import) por organización primaria
+![Inserción por primary](images/chart_insert_by_primary.png)
+
+## Búsqueda puntual por PK
+![Búsqueda puntual por PK](images/chart_search_eq_pk.png)
+
+## Búsqueda por rango (PK)
+![Búsqueda por rango (PK)](images/chart_search_range_pk.png)
+
+## Secundarios en `name` (igualdad) — IO
+![Secundarios en name (igualdad): IO](images/chart_sec_name_eq_io.png)
+
+## Secundarios en `name` (igualdad) — Tiempo
+![Secundarios en name (igualdad): Tiempo](images/chart_sec_name_eq_time.png)
+
+## Secundarios en `price` (rango) — IO
+![Secundarios en price (rango): IO](images/chart_sec_price_range_io.png)
+
+## Secundarios en `price` (rango) — Tiempo
+![Secundarios en price (rango): Tiempo](images/chart_sec_price_range_time.png)
+
+## Espacial en `coords` (R-Tree) — kNN
+![R-Tree kNN](images/chart_rtree_knn.png)
+
+
+
 
 
 
