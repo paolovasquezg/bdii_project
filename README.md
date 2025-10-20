@@ -64,7 +64,7 @@ Puedes revisar `backend/catalog/ddl.py` para mayor detalle.
 
 ### b. Registros: Clase `Record`
 
-Es la clase que maneja y generaliza los registros que se guardan en los archivos. Dado que en los archivos se guarda el esquema de la data, se puede calcular el formato y el tamaño de los registros y con esta clase hacer el *unpack* y *pack*. Note que generaliza cualquier tipo de dato.  Ver: `backend/core/record.py`.
+Es la clase que maneja y generaliza los registros que se guardan en los archivos. Dado que en los archivos se guarda el esquema de la data, se puede calcular el formato y el tamaño de los registros y con esta clase hacer el *unpack* y *pack*. Note que generaliza cualquier tipo de dato. Ver: `backend/core/record.py`.
 
 ---
 
@@ -160,9 +160,7 @@ A continuación se analiza la implementación de cada índice y su complejidad e
 
 ### a. Heap
 
-El índice **Heap** es agrupado y guarda los registros secuencialmente al final del archivo.  
-Permite que los índices no agrupados guarden la **posición física** de los registros.  
-No se reconstruye ni cambia.
+El índice **Heap** es agrupado y guarda los registros secuencialmente al final del archivo. Permite que los índices no agrupados guarden la **posición física** de los registros. No se reconstruye ni cambia.
 
 ![Heap](images/imagen3.png)
 
@@ -197,36 +195,25 @@ Ver: `backend/storage/indexes/heap.py`.
 
 ### b. Sequential
 
-Este índice, agrupado, guarda la data secuencialmente ordenada en un primer espacio, y luego tiene un espacio adicional para los registros adicionales.  
-Tomemos que la cantidad de registros en el espacio ordenado es **n**, y en el espacio adicional es **k = log(n)**, ya que si excede este tamaño el sequential se reconstruye.  
-Sigue la estructura de la imagen.  
-Ver: `backend/storage/indexes/sequential.py`.
+Este índice, agrupado, guarda la data secuencialmente ordenada en un primer espacio, y luego tiene un espacio adicional para los registros adicionales. Tomemos que la cantidad de registros en el espacio ordenado es **n**, y en el espacio adicional es **k = log(n)**, ya que si excede este tamaño el sequential se reconstruye. Sigue la estructura de la imagen. Ver: `backend/storage/indexes/sequential.py`.
 
 ![Sequential](images/imagen4.png)
 
 #### Insert
 
-Se debe revisar el archivo para validar repetidos.  
-Primero se busca en el espacio ordenado con **búsqueda binaria** (O(log n)), y luego secuencialmente en el espacio adicional (O(k)).  
-Si no se repite, se inserta al final.  
-En caso el espacio adicional exceda el valor de k, el archivo se reconstruye (O(n)).  
-Por tanto la complejidad es **O(n)**.
+Se debe revisar el archivo para validar repetidos. Primero se busca en el espacio ordenado con **búsqueda binaria** (O(log n)), y luego secuencialmente en el espacio adicional (O(k)). Si no se repite, se inserta al final. En caso el espacio adicional exceda el valor de k, el archivo se reconstruye (O(n)). Por tanto la complejidad es **O(n)**.
 
 #### Search
 
-Dado que la búsqueda es puntual y se indexa por la llave primaria, no hay repetidos.  
-Se busca en el espacio ordenado con búsqueda binaria (O(log n)), y luego en el espacio adicional secuencialmente (O(k)).  
-Por tanto, la complejidad es **O(log n)**.
+Dado que la búsqueda es puntual y se indexa por la llave primaria, no hay repetidos. Se busca en el espacio ordenado con búsqueda binaria (O(log n)), y luego en el espacio adicional secuencialmente (O(k)). Por tanto, la complejidad es **O(log n)**.
 
 #### Range Search
 
-Como muchos registros pueden cumplir la condición, se busca secuencialmente en el espacio ordenado (O(n)), y luego en el espacio adicional (O(k)).  
-La complejidad es **O(n)**.
+Como muchos registros pueden cumplir la condición, se busca secuencialmente en el espacio ordenado (O(n)), y luego en el espacio adicional (O(k)). La complejidad es **O(n)**.
 
 #### Remove
 
-Se remueve lógicamente el registro indicándolo como eliminado.  
-Pero primero se debe buscarlo, así que tiene la misma complejidad que el search: **O(log n)**.
+Se remueve lógicamente el registro indicándolo como eliminado. Pero primero se debe buscarlo, así que tiene la misma complejidad que el search: **O(log n)**.
 
 #### Tabla resumen
 
@@ -241,9 +228,7 @@ Pero primero se debe buscarlo, así que tiene la misma complejidad que el search
 
 ### c. ISAM
 
-Este índice, agrupado, guarda la data en páginas.  
-En la implementación, este examen es de **grado 2**, es decir, tiene dos niveles de índices antes de llegar a las páginas, y estas en caso de no poder hacer *split* se encuentran encadenadas.  
-Para el análisis, se asume que las operaciones se hacen con el atributo indexado.
+Este índice, agrupado, guarda la data en páginas. En la implementación, este examen es de **grado 2**, es decir, tiene dos niveles de índices antes de llegar a las páginas, y estas en caso de no poder hacer *split* se encuentran encadenadas. Para el análisis, se asume que las operaciones se hacen con el atributo indexado.
 
 Definiciones:
 
@@ -266,9 +251,7 @@ Ver: `backend/storage/indexes/isam.py`.
 - Si se llena el segundo nivel de índices → *split*.  
 - Si no es posible, se encadenan páginas.
 
-Como el ordenamiento se hace en RAM, los accesos a memoria secundaria provienen de escribir páginas de datos e índices.  
-Complejidad:  
-**O(n / K)** páginas de datos + **O(n / M)** páginas de índice ≈ **O(n)** accesos.
+Como el ordenamiento se hace en RAM, los accesos a memoria secundaria provienen de escribir páginas de datos e índices. Complejidad: **O(n / K)** páginas de datos + **O(n / M)** páginas de índice ≈ **O(n)** accesos.
 
 #### Insert
 
@@ -304,8 +287,7 @@ Complejidad: **O(1 + t)**.
 - Si hay encadenamiento, puede requerirse compactar o mover registros.
 
 Complejidad:  
-**O(1)** para encontrar + **O(1)** para modificar = **O(1)** amortizado.  
-En caso de compactar entre t páginas encadenadas → **O(t)**.
+**O(1)** para encontrar + **O(1)** para modificar = **O(1)** amortizado. En caso de compactar entre t páginas encadenadas → **O(t)**.
 
 #### Tabla resumen
 
@@ -329,9 +311,7 @@ Ver: `backend/storage/indexes/hash.py`.
 
 ### e. B+
 
-Este índice, agrupado y no agrupado, se organiza en páginas de datos.  
-Es similar al ISAM, pero a diferencia de este, **no necesita construirse previamente**, sino que es **dinámico** y crece conforme se insertan registros.  
-Para el análisis, se asume que las operaciones se realizan sobre el atributo indexado.
+Este índice, agrupado y no agrupado, se organiza en páginas de datos. Es similar al ISAM, pero a diferencia de este, **no necesita construirse previamente**, sino que es **dinámico** y crece conforme se insertan registros. Para el análisis, se asume que las operaciones se realizan sobre el atributo indexado.
 
 Sea:
 
@@ -389,8 +369,7 @@ Ver: `backend/storage/indexes/rtree.py`.
 
 ## 4. Análisis comparativo
 
-Habiendo visto cada técnica de indexación, podemos resumir las operaciones en la siguiente tabla.  
-Estamos tomando en cuenta el **peor caso** para cada operación.
+Habiendo visto cada técnica de indexación, podemos resumir las operaciones en la siguiente tabla. Estamos tomando en cuenta el **peor caso** para cada operación.
 
 | Índice       | Insert     | Search      | Range Search        | Remove       | KNN                       |
 |-------------|-----------|-------------|---------------------|-------------|---------------------------|
@@ -406,12 +385,10 @@ Estamos tomando en cuenta el **peor caso** para cada operación.
 ### Insights
 
 ### Heap y Sequential File
-Son estructuras sencillas pero poco eficientes en disco.  
-Para operaciones como búsqueda, inserción o eliminación, suelen requerir recorrer muchas páginas (**O(n)**), por lo que no son adecuadas cuando se busca minimizar lecturas y escrituras.
+Son estructuras sencillas pero poco eficientes en disco. Para operaciones como búsqueda, inserción o eliminación, suelen requerir recorrer muchas páginas (**O(n)**), por lo que no son adecuadas cuando se busca minimizar lecturas y escrituras.
 
 ### ISAM y Hashing
-Optimizan muy bien búsquedas puntuales con pocos accesos a página (**O(1 + t)** o **O(c + B)**), pero no soportan bien inserciones dinámicas o búsquedas por rango.  
-Son ideales cuando los datos son estáticos o crecen poco.
+Optimizan muy bien búsquedas puntuales con pocos accesos a página (**O(1 + t)** o **O(c + B)**), pero no soportan bien inserciones dinámicas o búsquedas por rango. Son ideales cuando los datos son estáticos o crecen poco.
 
 ### B+ Tree
 Es el índice más balanceado y eficiente para datos en disco:
@@ -429,7 +406,7 @@ Diseñado para datos espaciales (2D, 3D), no para datos lineales.
 
 ---
 
-### Conclusiones
+### Análisis
 
 - Si se buscan **mínimos accesos a disco con datos lineales**, el **B+ Tree** es la mejor opción.  
 - Si los datos son **estáticos o con pocas inserciones**, el **ISAM** ofrece buenos tiempos de búsqueda (**O(1 + t)**), aunque no se reequilibra dinámicamente.  
