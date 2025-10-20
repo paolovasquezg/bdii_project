@@ -95,13 +95,6 @@ rows   = Executor.execute(plans)   # iterador open/next/close
 return rows                        # Output (filas/JSON)
 ```
 
-
-# Introducción: Indexación
-
-*(completar)*
-
----
-
 # Funcionamiento: Técnicas utilizadas e índices
 
 
