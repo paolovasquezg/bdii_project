@@ -315,6 +315,8 @@ Ver: `backend/storage/indexes/rtree.py`.
 - **Complejidad promedio:** O(logₘ n)  
 - **Peor caso:** O(n/M) (si ocurren múltiples splits).
 
+![Diagrama de inserción en el R-Tree](images/RtreeInsert.png)
+
 #### Search
 - Recorre solo los nodos cuyos MBR contienen el punto consultado.  
 - **Complejidad promedio:** O(logₘ n)  
@@ -330,6 +332,8 @@ Ver: `backend/storage/indexes/rtree.py`.
 - Si el nodo queda por debajo del mínimo, se redistribuye o reinserta contenido.  
 - **Complejidad promedio:** O(logₘ n)  
 - **Peor caso:** O(n/M) (si hay reinserciones masivas o recorridos múltiples).
+
+![Diagrama de eliminación en el R-Tree](images/RtreeRemove.png)
 
 #### KNN
 - Utiliza una **cola de prioridad** para explorar nodos ordenados por distancia mínima al punto.  
