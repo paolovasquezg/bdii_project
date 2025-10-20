@@ -362,6 +362,8 @@ Complejidad:
 - Caso promedio: **O(1)** (por tamaño fijo de bucket y cadenas cortas).  
 - Peor caso: **O(1 + c)**, siendo c la longitud máxima de cadena.
 
+![img_1.png](hash_image.png)
+
 ---
 
 #### Range Search
