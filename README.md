@@ -362,7 +362,7 @@ Complejidad:
 - Caso promedio: **O(1)** (por tamaño fijo de bucket y cadenas cortas).  
 - Peor caso: **O(1 + c)**, siendo c la longitud máxima de cadena.
 
-![img_1.png](hash_image.png)
+![img_1.png](images/hash_image.png)
 
 ---
 
@@ -418,8 +418,6 @@ Ver: `backend/storage/indexes/rtree.py`.
 - Recorre solo los nodos cuyos MBR contienen el punto consultado.  
 - **Complejidad promedio:** O(logₘ n)  
 - **Peor caso:** O(n/M) (si hay solapamiento y se deben explorar muchas ramas).
-
-![img_1.png](hash_search.png)
 
 #### Range Search
 - Explora los nodos cuyos MBR intersectan el área consultada y filtra registros en hojas.  
