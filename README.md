@@ -318,7 +318,7 @@ Sea:
 - **n** = número de registros  
 - **K** = orden del nodo (máx. punteros por nodo)
 
-![B+](images/imagen6.png)
+![B+](images/6_bmas.png)
 
 Ver: `backend/storage/indexes/isam.py`.
 
