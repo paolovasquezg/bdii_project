@@ -3,9 +3,15 @@
 Comprender cómo una base de datos traduce una consulta en acciones concretas sobre memoria y disco requiere explorar el funcionamiento de sus componentes y estructuras internas. Este proyecto busca exponer qué ocurre al procesar cada instrucción, así como reproducir el proceso interno de un sistema gestor de bases de datos. Para ello, se ha desarrollado un motor de base de datos que implementa las etapas fundamentales de un DBMS: parser, planner, executor y storage, integradas en una arquitectura capaz de ejecutar sentencias SQL y evaluar distintos métodos de indexación para medir su eficacia y rendimiento.
 
 Como propósito central, se plantea **analizar y comparar el rendimiento de las operaciones básicas de búsqueda, inserción y eliminación** cuando se ejecutan utilizando diferentes técnicas de indexación. El sistema implementa tres enfoques de organización y acceso: **Sequential**, **ISAM** y **R-Tree**.  
-- El **Sequential File** (o archivo secuencial) es una estructura de almacenamiento ordenado que permite explorar registros de forma lineal, optimizando las búsquedas en archivos previamente clasificados.  
+- El **Sequential File** (o archivo secuencial) es una estructura de almacenamiento ordenado que permite explorar registros de forma lineal, optimizando las búsquedas en archivos previamente clasificados.  }
+![Flujo secuencial](images/sequential.jpg)
+
 - **ISAM (Indexed Sequential Access Method)** es una estructura jerárquica basada en claves que mejora el acceso directo mediante índices primarios y secundarios.  
+![ISAM](images/isam.png)
+
 - **R-Tree**, por su parte, extiende la idea de indexación hacia datos multidimensionales, organizando objetos espaciales a través de rectángulos mínimos (*Minimum Bounding Rectangles*).  
+![R Tree](images/rtree.png)
+
 
 En conjunto, estas estructuras permiten observar cómo la elección del índice impacta los costos de acceso a disco, la velocidad de respuesta y la eficiencia general del almacenamiento.
 
