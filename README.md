@@ -506,7 +506,7 @@ SELECT * FROM productos
   WHERE precio = 0.5;
 ```
 
-![Caso 1](images/imagen9.png)
+![Caso 1](images/caso1.png)
 
 ---
 
@@ -529,7 +529,7 @@ SELECT * FROM puntos
   WHERE coords IN (POINT(0, 0), 5);
 ```
 
-![Caso 2](images/imagen10.png)
+![Caso 2](images/caso2.png)
 
 ---
 
