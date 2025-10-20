@@ -1,5 +1,6 @@
 # summarize_bench_PLUS.py
-# Informe descriptivo con separación IO de datos vs índices y uso del plan.
+# Informe descriptivo con separación IO (datos vs. índices) y uso del plan.
+# Ahora incluye sección espacial (R-Tree) para kNN y/o ventanas en coords.
 # Escribe: bench_out/bench_summary_PLUS.md
 
 import sys, pathlib
@@ -18,15 +19,27 @@ def latest_csv():
 csv_path = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else latest_csv()
 df = pd.read_csv(csv_path)
 
-# Normaliza columnas
-for c in ("reads","writes","time_ms_exec","io_total","io_data_reads","io_data_writes","io_index_reads","io_index_writes",
-          "idx_used_primary","idx_used_secondary","index_usage"):
-    if c not in df.columns: df[c] = 0
+# ---------------- Normalización de columnas ----------------
+need_cols = [
+    "reads","writes","time_ms_exec","io_total",
+    "io_data_reads","io_data_writes","io_index_reads","io_index_writes",
+    "idx_used_primary","idx_used_secondary","index_usage",
+    "primary","secondary","target","op","k"
+]
+for c in need_cols:
+    if c not in df.columns:
+        df[c] = 0
 
-df["io_total"]      = df.get("io_total", df.get("reads",0)+df.get("writes",0))
-df["io_data_total"] = df.get("io_data_reads",0) + df.get("io_data_writes",0)
-df["io_index_total"]= df.get("io_index_reads",0) + df.get("io_index_writes",0)
+# Totales IO
+df["io_total"]       = df.get("io_total", df.get("reads",0)+df.get("writes",0))
+df["io_data_total"]  = df.get("io_data_reads",0)  + df.get("io_data_writes",0)
+df["io_index_total"] = df.get("io_index_reads",0) + df.get("io_index_writes",0)
 
+# Op como string en minúsculas (por si llega numérico/nulo)
+df["op"] = df["op"].astype(str).str.lower()
+df["target"] = df["target"].astype(str)
+
+# ---------------- Utilidades ----------------
 def q90(s):
     try: return float(s.quantile(0.90))
     except: return float("nan")
@@ -41,28 +54,28 @@ def md_table(frame, cols):
 def agg(frame, by, sort_col):
     if frame.empty: return frame
     g = (frame.groupby(by, dropna=False)
-        .agg(
-            runs=("time_ms_exec","size"),
-            time_mean=("time_ms_exec","mean"),
-            time_median=("time_ms_exec","median"),
-            time_p90=("time_ms_exec", q90),
-            time_std=("time_ms_exec","std"),
-            io_total=("io_total","mean"),
-            io_data=("io_data_total","mean"),
-            io_index=("io_index_total","mean"),
-            used_secondary_ratio=("idx_used_secondary", "mean"),
-        )
-        .reset_index()
-        .sort_values(sort_col, ascending=True))
+         .agg(
+             runs=("time_ms_exec","size"),
+             time_mean=("time_ms_exec","mean"),
+             time_median=("time_ms_exec","median"),
+             time_p90=("time_ms_exec", q90),
+             time_std=("time_ms_exec","std"),
+             io_total=("io_total","mean"),
+             io_data=("io_data_total","mean"),
+             io_index=("io_index_total","mean"),
+             used_secondary_ratio=("idx_used_secondary", "mean"),
+         )
+         .reset_index()
+         .sort_values(sort_col, ascending=True))
     return g
 
-lines=[]
+lines = []
 lines.append(f"# Resumen PLUS de Benchmarks\n")
 lines.append(f"- Archivo: `{csv_path.name}`")
 lines.append(f"- Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 lines.append(f"- Filas: {len(df)}")
 
-# 1) Inserción
+# ---------------- 1) Inserción ----------------
 s = df[(df["op"]=="insert") & (df["target"]=="pk")]
 lines.append("\n\n## Inserción (import) por organización primaria")
 if s.empty:
@@ -70,11 +83,13 @@ if s.empty:
 else:
     t = agg(s, ["primary"], "time_mean")
     lines.append(md_table(t, ["primary","runs","time_mean","io_total","io_data","io_index"]))
-    if not s["index_usage"].eq(0).all():
-        lines.append("\n**Ejemplos de index_usage (import)**")
-        lines.append("```\n" + "\n".join(s["index_usage"].astype(str).head(5).tolist()) + "\n```")
+    # Muestra del plan (si trae algo)
+    sample = s.loc[s["index_usage"].astype(str)!="0","index_usage"].astype(str).head(5)
+    if not sample.empty:
+        lines.append("\n**Ejemplos de `index_usage` (import)**")
+        lines.append("```\n" + "\n".join(sample.tolist()) + "\n```")
 
-# 2) PK = igualdad
+# ---------------- 2) PK = igualdad ----------------
 s = df[(df["op"]=="search_eq") & (df["target"]=="pk")]
 lines.append("\n\n## Búsqueda puntual por PK")
 if s.empty:
@@ -83,9 +98,10 @@ else:
     t = agg(s, ["primary"], "time_mean")
     lines.append(md_table(t, ["primary","runs","time_mean","time_p90","io_total","io_data","io_index"]))
     lines.append("\n**Uso de índice secundario (debería ser 0 aquí):**")
-    lines.append(md_table(agg(s, ["primary"], "used_secondary_ratio"), ["primary","used_secondary_ratio"]))
+    lines.append(md_table(agg(s, ["primary"], "used_secondary_ratio"),
+                          ["primary","used_secondary_ratio"]))
 
-# 3) PK = rango
+# ---------------- 3) PK = rango ----------------
 s = df[(df["op"]=="search_range") & (df["target"]=="pk")]
 lines.append("\n\n## Búsqueda por rango (PK)")
 if s.empty:
@@ -94,7 +110,7 @@ else:
     t = agg(s, ["primary"], "time_mean")
     lines.append(md_table(t, ["primary","runs","time_mean","time_p90","io_total","io_data","io_index"]))
 
-# 4) name = igualdad (secundarios)
+# ---------------- 4) name = igualdad (secundarios) ----------------
 s = df[(df["target"]=="name") & (df["op"]=="search_eq")]
 lines.append("\n\n## Secundarios en `name` (igualdad)")
 if s.empty:
@@ -107,7 +123,7 @@ else:
     t2 = agg(s, ["secondary"], "time_mean")
     lines.append(md_table(t2, ["secondary","runs","time_mean","time_p90","io_total","io_data","io_index","used_secondary_ratio"]))
 
-# 5) price = rango (secundarios)
+# ---------------- 5) price = rango (secundarios) ----------------
 s = df[(df["target"]=="price") & (df["op"]=="search_range")]
 lines.append("\n\n## Secundarios en `price` (rango)")
 if s.empty:
@@ -120,13 +136,41 @@ else:
     t2 = agg(s, ["secondary"], "time_mean")
     lines.append(md_table(t2, ["secondary","runs","time_mean","time_p90","io_total","io_data","io_index","used_secondary_ratio"]))
 
-# 6) Muestra de planes usados
-ls = df.loc[(df["index_usage"] != 0) & (df["index_usage"].astype(str) != ""), "index_usage"].astype(str)
+# ---------------- 6) ESPACIAL: coords / R-Tree ----------------
+s_coords = df[df["target"].str.lower()=="coords"]
+lines.append("\n\n## Espacial en `coords` (R-Tree)")
+if s_coords.empty:
+    lines.append("_(sin datos espaciales)_")
+else:
+    # kNN
+    sknn = s_coords[s_coords["op"]=="knn"]
+    if not sknn.empty:
+        lines.append("**kNN (R-Tree) — por primary**")
+        t = agg(sknn, ["primary"], "time_mean")
+        lines.append(md_table(t, ["primary","runs","time_mean","time_p90","io_total","io_index","io_data"]))
+        if "k" in sknn.columns:
+            lines.append("\n**kNN — agregado por k**")
+            tk = agg(sknn, ["k"], "time_mean")
+            lines.append(md_table(tk, ["k","runs","time_mean","time_p90","io_total","io_index","io_data"]))
+        # Muestra de planes
+        sample = sknn.loc[sknn["index_usage"].astype(str)!="0","index_usage"].astype(str).head(8)
+        if not sample.empty:
+            lines.append("\n**Ejemplos de `index_usage` (kNN esperado: `secondary:rtree(coords):knn`)**")
+            lines.append("```\n" + "\n".join(sample.tolist()) + "\n```")
+    # Ventanas / rangos espaciales (si existieran)
+    swin = s_coords[s_coords["op"].isin(["within","window","box","range"])]
+    if not swin.empty:
+        lines.append("\n**Ventanas/rangos espaciales — por primary**")
+        t = agg(swin, ["primary","op"], "time_mean")
+        lines.append(md_table(t, ["primary","op","runs","time_mean","time_p90","io_total","io_index","io_data"]))
+
+# ---------------- 7) Muestra global de planes ----------------
+ls = df.loc[(df["index_usage"].astype(str) != "0") & (df["index_usage"].astype(str) != ""), "index_usage"].astype(str)
 if not ls.empty:
-    lines.append("\n\n## Muestra de `index_usage`")
+    lines.append("\n\n## Muestra global de `index_usage`")
     lines.append("```\n" + "\n".join(ls.head(12).tolist()) + "\n```")
 
-# Guardar
+# ---------------- Guardar ----------------
 outdir = pathlib.Path("bench_out"); outdir.mkdir(exist_ok=True)
 md_path = outdir / "bench_summary_PLUS.md"
 with open(md_path, "w", encoding="utf-8") as f:
