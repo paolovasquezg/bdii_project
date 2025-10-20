@@ -638,13 +638,12 @@ class Executor:
                                           detail={"plan": p}, plan=plan_safe, t_ms=(perf_counter()-t0)*1000))
                 overall_ok = False
 
-            try:
-                dt = (perf_counter() - t0) * 1000.0
-                if len(results) > before_len:
-                    results[-1]["meta"]["time_ms"] = elapsed_ms + dt
-                    elapsed_ms += dt
-            except Exception:
-                pass
+            dt = (perf_counter() - t0) * 1000.0
+            if len(results) > before_len:
+                m = results[-1].setdefault("meta", {})
+                m["time_ms"] = dt  # <-- delta de este plan
+                elapsed_ms += dt
+                m["time_ms_cum"] = elapsed_ms  # opcional: acumulado informativo
 
         total_ms = (perf_counter() - t0_all) * 1000.0
         return {

@@ -51,6 +51,8 @@ for pid, name, xy in rows:
 run_sql(f"INSERT INTO pk_switch_rtree VALUES (21, 'o6', '50,4'),(22, 'o7', '21,3')")
 
 
+run_sql("select * from pk_switch_rtree where id = 5")
+
 run_sql(
     '''
     SELECT id, name, coords
