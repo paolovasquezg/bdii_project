@@ -303,6 +303,99 @@ Complejidad:
 
 ### d. Extendible Hashing
 
+Este índice dinámico utiliza un **directorio de hash** en memoria que crece de forma **controlada** conforme se insertan nuevos elementos. Su principal ventaja es que evita reorganizar toda la estructura cuando crece, gracias a **splits locales** y **cadenas de desbordamiento con longitud acotada**.
+
+Definiciones:
+
+- **n**: número de elementos  
+- **B**: capacidad de registros por bucket  
+- **d**: profundidad global (bits usados del hash)  
+- **c**: longitud de la cadena de overflow  
+- `BUCKET_SIZE = 5`, `INITIAL_MAX_CHAIN = 2`, `MAX_GLOBAL_DEPTH = 20`
+
+Ver: `backend/storage/indexes/hash.py`.
+
+---
+
+#### Build
+
+- Se inicializa el directorio con profundidad global 1.  
+- Se crean 2 buckets iniciales vacíos.  
+- Se insertan todos los registros calculando su hash y dirigiéndolos al bucket correspondiente.  
+- Cuando un bucket se llena:  
+  - Si la división es productiva, se realiza un **split**, actualizando el directorio y redistribuyendo registros.  
+  - Si no, se crea un bucket encadenado (overflow).  
+- Si la profundidad local = global, se **duplica el directorio** antes de dividir.
+
+Como no hay un ordenamiento previo, el costo está dominado por el número de inserciones y splits necesarios.
+
+Complejidad aproximada:  
+- Inserciones directas: **O(n)**  
+- Splits: cada split redistribuye ≤ B registros → **O(n)** total amortizado.
+
+---
+
+#### Insert
+
+- Se calcula el hash y se toma **d bits** para acceder al bucket en el directorio.  
+- Se lee el bucket:  
+  - Si hay espacio → insertar directamente.  
+  - Si está lleno → recorrer cadena de overflow si no excede la longitud máxima.  
+  - Si se excede y la división es productiva → **split del bucket** y reinserción.  
+  - Si no es productiva → se encadena un nuevo bucket.  
+- Si `local_depth == global_depth` → duplicar directorio antes del split.
+
+Complejidad:  
+- Inserción directa: **O(1)**  
+- Encadenamiento: **O(1)** (longitud acotada)  
+- Split: **O(n)** en el peor caso, pero **amortizado O(1)**.
+
+---
+
+#### Search
+
+- Se calcula el hash → se indexa en el directorio.  
+- Se accede al bucket y se busca linealmente.  
+- Si no se encuentra y hay cadena de overflow, se recorren secuencialmente los buckets encadenados.
+
+Complejidad:  
+- Caso promedio: **O(1)** (por tamaño fijo de bucket y cadenas cortas).  
+- Peor caso: **O(1 + c)**, siendo c la longitud máxima de cadena.
+
+---
+
+#### Range Search
+
+El hashing extensible **no soporta búsquedas por rango de manera eficiente**, ya que los buckets no siguen un orden lógico de claves. Para realizar una búsqueda por rango, sería necesario recorrer **todos los buckets**, lo que implica **O(n)**.
+
+---
+
+#### Remove
+
+- Se calcula el hash → se ubica el bucket → se busca el registro.  
+- Si se encuentra, se elimina directamente y se actualiza la página en disco.  
+- Si hay cadenas, puede implicar recorrerlas secuencialmente.  
+- Opcionalmente se puede compactar buckets de overflow si quedan vacíos.
+
+Complejidad:  
+- Búsqueda: **O(1 + c)**  
+- Eliminación: **O(1)**  
+- Compactación: **O(c)** si aplica.
+
+---
+
+#### Tabla resumen
+
+| Operación        | Explicación breve                                                                                                            | Caso promedio | Peor caso |
+|------------------|-------------------------------------------------------------------------------------------------------------------------------|---------------|-----------|
+| **Build**        | Inicializa directorio y buckets, inserta registros uno a uno, haciendo splits locales y chaining cuando es necesario.         | O(n)         | O(n)     |
+| **Insert**       | Accede al bucket vía hash, inserta si hay espacio; si no, hace chaining o split. Directorio se duplica si es necesario.       | O(1)\*      | O(n)     |
+| **Search**       | Se calcula hash y se accede directamente al bucket; si hay cadena, se recorre secuencialmente.                                | O(1)        | O(1 + c) |
+| **Range Search** | No está soportado eficientemente. Requiere recorrer todos los buckets.                                                        | O(n)        | O(n)     |
+| **Remove**       | Se calcula hash, se accede al bucket y se elimina. Si hay cadenas, se recorren y compactan si aplica.                         | O(1)        | O(1 + c) |
+
+---
+
 ### R-Tree
 
 El **R-Tree** es un índice espacial jerárquico que organiza datos multidimensionales mediante **MBRs** (Minimum Bounding Rectangles). Cada nodo almacena M entradas como máximo, y los nodos internos representan rectángulos que engloban a sus hijos.  Su estructura permite realizar búsquedas espaciales eficientes (punto, rango, kNN) evitando recorrer todo el conjunto de datos.
