@@ -15,15 +15,52 @@ Esto construirá las imágenes y levantará ambos servicios:
 - **Backend**: `http://127.0.0.1:8000`
 - **Frontend**: `http://localhost:5173`
 
+# Introducción
 
-# Introducción: Indexación
+## Objetivo del proyecto
 
-*(completar)*
+Construir un motor de base de datos educativo “de punta a punta” que permita estudiar el impacto del diseño físico y de las técnicas de indexación sobre el costo de E/S en disco. El sistema integra: (i) un **parser** para un subconjunto de SQL, (ii) un **planner** que mapea las sentencias a planes físicos y (iii) un **executor** que opera sobre organizaciones de archivos (Heap, Sequential, ISAM) y **índices primarios/secundarios** (B+Tree, Hash, R-Tree) para consultas puntuales, de rango y espaciales. Con ello se comparan tiempos y accesos a memoria secundaria por operación, siguiendo la literatura de organización de archivos e indexación (ISAM/B+/Hash) y de índices espaciales (R-Tree).  
 
----
+## Aplicación de referencia
 
-# Funcionamiento: Técnicas utilizadas e índices
+**Catálogo geolocalizado de productos/tiendas** (retail).
 
+* **Consultas típicas**:
+
+  * Buscar un producto por **ID** (equality lookup).
+  * Filtrar por **rango de precio/stock** y ordenar.
+  * Encontrar la **tienda más cercana** o todos los locales **dentro de un radio** (KNN / range espacial).
+* **Combinación de técnicas**:
+
+  * **PK con B+Tree** (o ISAM para cargas por lotes): búsqueda logarítmica y buen soporte de rango/orden. 
+  * **Índice Hash secundario** para búsquedas exactas por nombre/código alterno. 
+  * **Índice B+ secundario** en precio para rangos/ORDER BY eficientes. 
+  * **R-Tree** (o GiST-RTree) sobre coordenadas para *range* y *k-NN* espaciales.  
+
+## Resultados esperados al aplicar las técnicas de indexación
+
+* **Búsquedas puntuales**:
+
+  * **Hash** ≈ O(1) esperado en accesos a página (con degradación por overflow); útil para igualdad, no para rangos. 
+  * **B+Tree/ISAM** ≈ O(log_F N) E/S, estable y compatible con *range scans* y ordenamientos. 
+* **Consultas por rango y ORDER BY**:
+
+  * **B+Tree** reduce E/S frente a escaneo secuencial y evita *sort* adicional al estar encadenadas las hojas. 
+* **Cargas y escrituras**:
+
+  * **Sequential/ISAM** favorecen **import masivo** y recorridos; ISAM puede derivar a **overflow** en inserciones desordenadas. 
+  * **B+Tree** mantiene balance con splits/merges controlados (costo logarítmico). 
+* **Consultas espaciales**:
+
+  * **R-Tree** agrupa por MBRs y logra O(log_M N) E/S para *range* y **k-NN** al podar ramas con **MINDIST**, superando el escaneo lineal.  
+* **Trade-offs**:
+
+  * Cada índice acelera lecturas a costa de **espacio adicional** y **mayor costo de inserción/actualización**; la elección depende del patrón de acceso predominante (lectura pesada vs. escritura pesada) y del tipo de predicados (igualdad, rango, espacial). 
+
+> En síntesis, el proyecto busca demostrar —con métricas de E/S y tiempo— que la combinación adecuada de **B+Tree + Hash + R-Tree** sobre organizaciones **Sequential/ISAM/Heap** maximiza el desempeño del catálogo geolocalizado: *lookups* constantes o logarítmicos, *ranges* eficientes y consultas espaciales podadas, todo integrado desde el parser hasta el ejecutor.  
+
+
+## Flujo del proyecto
 
 Primeramente, describiremos el flujo del proyecto:
 
@@ -50,8 +87,25 @@ Primeramente, describiremos el flujo del proyecto:
 * **Output**: devuelve filas/JSON al cliente.
 * **Catálogo & Stats (transversal)**: esquemas, tipos, PK/índices, #filas, min/max, NDV. Son consultados por Parser/Planner/Executor.
 
+Overview del recorrido completo:
+```sql
+stmts  = SQLParser.parse(sql)      # SQL → Tokens → AST → dicts
+plans  = Planner.plan(stmts)       # ASTs → plan físico (con catálogo/estadísticas)
+rows   = Executor.execute(plans)   # iterador open/next/close
+return rows                        # Output (filas/JSON)
+```
 
-Se pretende revisar un poco el funcionamiento de la aplicación y las técnicas implementadas. Se hace una revisión específicamente al **backend** de la aplicación, y su aspecto teórico.
+
+# Introducción: Indexación
+
+*(completar)*
+
+---
+
+# Funcionamiento: Técnicas utilizadas e índices
+
+
+A continuación, se pretende revisar un poco el funcionamiento de la aplicación y las técnicas implementadas. Se hace una revisión específicamente al **backend** de la aplicación, y su aspecto teórico.
 
 ---
 
