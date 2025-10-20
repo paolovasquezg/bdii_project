@@ -307,6 +307,8 @@ Complejidad:
 
 El **R-Tree** es un índice espacial jerárquico que organiza datos multidimensionales mediante **MBRs** (Minimum Bounding Rectangles). Cada nodo almacena M entradas como máximo, y los nodos internos representan rectángulos que engloban a sus hijos.  Su estructura permite realizar búsquedas espaciales eficientes (punto, rango, kNN) evitando recorrer todo el conjunto de datos.
 
+![Diagrama de inserción en el R-Tree](images/rtree.png)
+
 Ver: `backend/storage/indexes/rtree.py`.
 
 #### Insert
