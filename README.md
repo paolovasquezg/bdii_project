@@ -472,7 +472,7 @@ Complejidad:
 
 ---
 
-### R-Tree
+### e. R-Tree
 
 El **R-Tree** es un índice espacial jerárquico que organiza datos multidimensionales mediante **MBRs** (Minimum Bounding Rectangles). Cada nodo almacena M entradas como máximo, y los nodos internos representan rectángulos que engloban a sus hijos.  Su estructura permite realizar búsquedas espaciales eficientes (punto, rango, kNN) evitando recorrer todo el conjunto de datos.
 
@@ -525,7 +525,7 @@ Ver: `backend/storage/indexes/rtree.py`.
 
 ---
 
-### e. B+
+### f. B+
 
 Este índice, agrupado y no agrupado, se organiza en páginas de datos. Es similar al ISAM, pero a diferencia de este, **no necesita construirse previamente**, sino que es **dinámico** y crece conforme se insertan registros. Para el análisis, se asume que las operaciones se realizan sobre el atributo indexado.
 
@@ -576,12 +576,6 @@ Complejidad: **O(logₖ n + t)** (t = páginas de datos leídas).
 | **Remove**       | Ubica el dato, lo elimina.                                                                                | O(logₖ n)       | O(logₖ n)       |
 
 ---
-
-### f. RTree
-
-*(completar)*
-
-Ver: `backend/storage/indexes/rtree.py`.
 
 ## 4. Análisis comparativo
 
@@ -649,12 +643,6 @@ Diseñado para datos espaciales (2D, 3D), no para datos lineales.
 ---
 
 # Resultados: Mediciones y experimentos
-
-perfecto—acá tienes un **resumen breve y pegable** (con tablas) de tu última corrida `bench_primsec_20251019_235527.csv`. Usa esto tal cual en tu informe.
-
----
-
-# Informe breve de experimentación (PK, secundarios y espacial)
 
 **Setup.** ~1K filas (products). Primarios: `heap`, `sequential`, `isam`, `bplus`.
 Secundarios: `name` (`hash`, `bplus`), `price` (`bplus`). Espacial: `coords` con **R-Tree** (kNN, k=10).
@@ -741,7 +729,7 @@ Secundarios: `name` (`hash`, `bplus`), `price` (`bplus`). Espacial: `coords` con
 
 ---
 
-## Conclusiones en 4 líneas
+## Conclusiones
 
 * **PK puntual:** `sequential` es el más rápido; `bplus` usa menos IO.
 * **PK rango:** `sequential` en tiempo, `isam` en IO.
