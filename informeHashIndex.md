@@ -47,8 +47,91 @@ Cada página de datos o bucket tiene a su vez una estructura interna específica
 
 Esta organización física en disco es la base sobre la cual operan los componentes lógicos que se mantienen en memoria durante la ejecución del programa.
 
-**Tiempo espacial**
-![img_9.png](img_9.png)
+---
+****Tiempo Espacial: Uso de Memoria****
+
+---
+
+<style>
+  .column-container {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    margin-top: 20px;
+  }
+  .custom-panel {
+    flex: 1;
+    background-color: #f5f5f5;
+    padding: 20px;
+    border-radius: 8px;
+  }
+  .top-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 20px;
+    text-align: center;
+    margin-bottom: 25px;
+  }
+  .card {
+    background-color: #e9ecef;
+    padding: 15px;
+    border-radius: 5px;
+  }
+  .card .symbol {
+    font-size: 1.5em;
+    font-weight: bold;
+    font-family: monospace;
+  }
+  .card .label {
+    font-weight: bold;
+  }
+</style>
+
+# Tiempo Espacial: Uso de Memoria
+
+<div class="top-cards">
+  <div class="card">
+    <div class="symbol">O(n)</div>
+    <div class="label">Espacio Total</div>
+  </div>
+  <div class="card">
+    <div class="symbol">2^d</div>
+    <div class="label">Directorio</div>
+  </div>
+  <div class="card">
+    <div class="symbol">B</div>
+    <div class="label">Bucket Size</div>
+  </div>
+  <div class="card">
+    <div class="symbol">C</div>
+    <div class="label">Chain Length</div>
+  </div>
+</div>
+
+<div class="column-container">
+
+<div class="custom-panel">
+
+**Estructura en Memoria** 
+
+* El espacio espacial incluye directorio, buckets y páginas de overflow.
+* **Directorio**: $2^d \times 4$ bytes
+* **Buckets**: $n \times (\text{HEADER} + B \times \text{record\_size})$
+* **Overflow**: cadenas dinámicas
+</div>
+
+<div class="custom-panel">
+
+**Eficiencia Espacial**
+
+* Uso óptimo de espacio con factor de carga controlado.
+* **Factor de carga**: 75-80% promedio.
+* Reducción de espacio desperdiciado.
+* Crecimiento dinámico controlado.
+</div>
+
+</div>
+
 ## Gestión del Factor de Carga (Equivalente al 75%-80%)
 
 En esta implementación, no se define un "factor de carga" numérico (como 75% u 80%). En su lugar, se establecen límites y criterios concretos que determinan la capacidad máxima y cuándo se debe iniciar una expansión (división) o un encadenamiento. Estos mecanismos cumplen una función similar a la gestión de la carga:
@@ -85,10 +168,163 @@ El proceso de inserción es el más complejo, ya que puede desencadenar reorgani
 6.  **Reintento de Inserción Post-División:** Una vez completada la división, que redistribuye los registros de la cadena original, el sistema recalcula el índice del bucket para el registro a insertar y reintenta la inserción.
 7.  **Fallback a Chaining:** En el caso excepcional de que la división no libere espacio en la cadena de destino (por ejemplo, debido a una mala distribución de los valores de hash), el sistema recurre como último recurso a añadir un nuevo eslabón a la cadena, excediendo temporalmente el límite de `_max_chain_length` para garantizar que la inserción se complete.
 
-![img_2.png](img_2.png)
 
-![img_3.png](img_3.png)
-### 4.2 Operación de Búsqueda (find)
+---
+Método Insert
+---
+
+<style>
+  .process-container {
+    font-family: sans-serif;
+    position: relative;
+    max-width: 600px;
+    margin: auto;
+    padding-left: 50px; /* Espacio para la línea y los íconos */
+  }
+
+  .process-container::before {
+    content: '';
+    position: absolute;
+    left: 20px;
+    top: 15px;
+    bottom: 15px;
+    width: 2px;
+    background-color: #cccccc;
+  }
+
+  .step {
+    display: flex;
+    align-items: flex-start;
+    margin-bottom: 25px;
+    position: relative;
+  }
+
+  .icon {
+    width: 40px;
+    height: 40px;
+    background-color: #343a40; /* Color oscuro para el ícono */
+    color: white;
+    border-radius: 8px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 20px;
+    position: absolute;
+    left: -40px;
+    border: 2px solid white;
+    z-index: 10;
+  }
+
+  .content {
+    padding-left: 20px;
+  }
+
+  .content h3 {
+    margin-top: 5px;
+    margin-bottom: 5px;
+    font-weight: bold;
+  }
+
+  .content p {
+    margin-top: 0;
+    color: #555555;
+    font-size: 0.95em;
+  }
+
+</style>
+
+
+<div class="process-container">
+
+  <div class="step">
+    <div class="icon">🔍</div>
+    <div class="content">
+      <h3>1. Búsqueda Posición</h3>
+      <p>O(1) + O(c): Localizar bucket para inserción</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="icon">➕</div>
+    <div class="content">
+      <h3>2. Inserción Directa</h3>
+      <p>O(1): Si hay espacio, inserción inmediata</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="icon">🔗</div>
+    <div class="content">
+      <h3>3. Overflow Chaining</h3>
+      <p>O(1): Crear nuevo bucket en cadena</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="icon">🔀</div>
+    <div class="content">
+      <h3>4. Split y Rehash</h3>
+      <p>O(n): Redimensionamiento y redistribución</p>
+    </div>
+  </div>
+
+</div>
+
+
+---
+Análisis Split: Costo Temporal
+---
+
+<style>
+.swot-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 10px; /* Espacio entre las celdas */
+  margin-top: 20px;
+}
+.swot-cell {
+  width: 50%;
+  padding: 20px;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  vertical-align: top;
+  text-align: center;
+  border: 1px solid #ddd;
+}
+.swot-cell h3 {
+  margin-top: 0;
+  font-weight: bold;
+}
+.swot-cell p {
+  font-size: 1em;
+  color: #333;
+}
+</style>
+
+<table class="swot-table">
+  <tr>
+    <td class="swot-cell">
+      <h3>Fortalezas (S)</h3>
+      <p>Balanceo de carga y reducción de colisiones.</p>
+    </td>
+    <td class="swot-cell">
+      <h3>Debilidades (W)</h3>
+      <p>Costo O(n) en redistribución de registros.</p>
+    </td>
+  </tr>
+  <tr>
+    <td class="swot-cell">
+      <h3>Amenazas (T)</h3>
+      <p>Posible cascada de splits.</p>
+    </td>
+    <td class="swot-cell">
+      <h3>Oportunidades (O)</h3>
+      <p>Mejora en tiempo de búsqueda futura.</p>
+    </td>
+  </tr>
+</table>
+
+##  4.2 Operación de Búsqueda (find)
 
 La búsqueda de un registro es un proceso directo que aprovecha la estructura del directorio para localizar rápidamente los datos:
 
@@ -97,7 +333,135 @@ La búsqueda de un registro es un proceso directo que aprovecha la estructura de
 3.  **Recorrido de la Cadena de Desbordamiento:** El método `_read_chain` se invoca para leer secuencialmente el bucket principal y todos los buckets de desbordamiento enlazados a él.
 4.  **Búsqueda Lineal dentro de los Buckets:** Se realiza una búsqueda lineal dentro de la lista de registros de cada bucket de la cadena. Se devuelven todos los registros que coinciden con el `key_value` proporcionado, asegurándose de excluir aquellos que puedan estar marcados como eliminados (`deleted`).
 
-![img.png](img.png)
+---
+Método Find
+---
+
+<style>
+body {
+  font-family: sans-serif;
+  background-color: #f4f4f9;
+}
+
+.timeline {
+  position: relative;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+/* La línea vertical del centro */
+.timeline::after {
+  content: '';
+  position: absolute;
+  width: 3px;
+  background-color: #dcdcdc;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  margin-left: -1.5px;
+}
+
+/* Contenedor para cada paso */
+.container {
+  padding: 10px 40px;
+  position: relative;
+  background-color: inherit;
+  width: 50%;
+  box-sizing: border-box;
+}
+
+/* El ícono en la línea de tiempo */
+.container::after {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  right: -20px;
+  background-color: #343a40; /* Color oscuro para el ícono */
+  border: 3px solid #f4f4f9;
+  top: 15px;
+  border-radius: 8px;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-size: 20px;
+}
+
+/* Posicionamiento de los contenedores */
+.left {
+  left: 0;
+}
+
+.right {
+  left: 50%;
+}
+
+/* Íconos para cada paso */
+.left.step1::after { content: '🧮'; }
+.right.step2::after { content: '📍'; }
+.left.step3::after { content: '⛓️'; }
+.right.step4::after { content: '🔍'; }
+
+/* Ajuste de la posición de los íconos */
+.right::after {
+  left: -20px;
+}
+
+/* El contenido de cada paso */
+.content {
+  padding: 20px 30px;
+  background-color: #ffffff;
+  position: relative;
+  border-radius: 8px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.1);
+}
+
+.content h3 {
+  margin-top: 0;
+  font-weight: bold;
+}
+
+.content p {
+  margin-bottom: 0;
+  color: #555;
+}
+
+</style>
+
+
+<div class="timeline">
+
+  <div class="container left step1">
+    <div class="content">
+      <h3>1. Cálculo Hash</h3>
+      <p>O(1): Cálculo de hash(key) y máscara de bits</p>
+    </div>
+  </div>
+
+  <div class="container right step2">
+    <div class="content">
+      <h3>2. Acceso Directorio</h3>
+      <p>O(1): Acceso directo al índice del directorio</p>
+    </div>
+  </div>
+
+  <div class="container left step3">
+    <div class="content">
+      <h3>3. Recorrido Cadena</h3>
+      <p>O(c): Recorrido de cadenas de overflow (c <=max_chain</p>
+    </div>
+  </div>
+
+  <div class="container right step4">
+    <div class="content">
+      <h3>4. Búsqueda Bucket</h3>
+      <p>O(B): Búsquedaa lineal dentro del bucket (B <=BUCKET_SIZE)</p>
+    </div>
+  </div>
+
+</div>
 
 ![img_1.png](img_1.png)
 
@@ -106,7 +470,129 @@ Debido a que B y c son conocidos, se consideran como constantes O(1).
 ### 4.3 Operación de Eliminación (remove)
 
 El proceso de eliminación es muy similar al de búsqueda. Primero, se identifica la cadena de buckets correspondiente a la clave del registro a eliminar. A continuación, se recorre la cadena y se invoca el método `bucket.remove` en cada bucket. Este método busca y elimina los registros coincidentes. Si se elimina al menos un registro de un bucket (`if rem:`), este se reescribe inmediatamente en el disco (`_write_bucket`) para hacer el cambio persistente.
-![img_5.png](img_5.png)
+
+---
+Método Remove: Análisis Temporal
+---
+
+<style>
+body {
+  font-family: sans-serif;
+}
+
+.timeline {
+  position: relative;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px 0;
+}
+
+/* La línea vertical del centro */
+.timeline::after {
+  content: '';
+  position: absolute;
+  width: 3px;
+  background-color: #dcdcdc;
+  top: 20px;
+  bottom: 20px;
+  left: 50%;
+  margin-left: -1.5px;
+}
+
+/* Contenedor para cada paso */
+.container {
+  padding: 10px 40px;
+  position: relative;
+  background-color: inherit;
+  width: 50%;
+  box-sizing: border-box;
+}
+
+/* El ícono en la línea de tiempo */
+.container::after {
+  content: '';
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  right: -20px;
+  background-color: #343a40; /* Color oscuro */
+  border: 3px solid #f8f9fa;
+  top: 25px;
+  border-radius: 8px;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  font-size: 20px;
+}
+
+/* Posicionamiento */
+.left {
+  left: 0;
+}
+.right {
+  left: 50%;
+}
+
+/* Íconos para cada paso */
+.step1::after { content: '🔍'; }
+.step2::after { content: '🗑️'; }
+.step3::after { content: '🔄'; }
+
+
+.right::after {
+  left: -20px;
+}
+
+.content {
+  padding: 15px 25px;
+  background-color: #f8f9fa; /* Fondo claro */
+  position: relative;
+  border-radius: 8px;
+}
+
+.left .content {
+  text-align: right;
+}
+
+.content h3 {
+  margin-top: 0;
+  font-weight: bold;
+}
+.content p {
+  margin-bottom: 0;
+  color: #555;
+}
+
+</style>
+
+
+<div class="timeline">
+
+  <div class="container left step1">
+    <div class="content">
+      <h3>1. Localizar Registro</h3>
+      <p>O(1) + O(c): Hash + recorrido de cadena</p>
+    </div>
+  </div>
+
+  <div class="container right step2">
+    <div class="content">
+      <h3>2. Eliminar Registro</h3>
+      <p>O(B): Búsqueda y eliminación dentro del bucket</p>
+    </div>
+  </div>
+
+  <div class="container left step3">
+    <div class="content">
+      <h3>3. Actualizar Referencias</h3>
+      <p>O(1): Actualizar contadores y punteros</p>
+    </div>
+  </div>
+
+</div>
+
 A continuación, se profundizará en los mecanismos internos que hacen posible la escalabilidad del sistema, como la división de buckets.
 
 ## 5.0 Mecanismos Internos Críticos
@@ -128,14 +614,67 @@ Una vez que se asegura que el directorio tiene la granularidad necesaria, el pro
 3.  **Actualización de Profundidades Locales:** La profundidad local tanto del bucket original como del nuevo se incrementa en 1 (`old_local + 1`), reflejando que ahora utilizan un bit más del hash para diferenciar registros.
 4.  **Reinserción de Registros:** Se implementa un proceso de dos fases. Primero, la cadena de buckets original es vaciada por completo (se eliminan sus registros y se rompen los enlaces de desbordamiento, `overflow_page = -1`), dejando los buckets limpios pero en su lugar. Segundo, todos los registros de la cadena original, que fueron previamente recopilados en una lista (`old_records`), se reinsertan en la estructura uno por uno utilizando el método público `insert`.
 
-**Ventajas y desventajas de realizar split**
-![img_8.png](img_8.png)
 **Análisis de Rendimiento:** Esta estrategia de reinserción recursiva, si bien simplifica la lógica de redistribución, nos introduce una sobrecarga de rendimiento. Cada llamada a `insert` repite el proceso de búsqueda de la cadena de buckets correcta, y en escenarios de datos con mala distribución de hash, podría teóricamente conducir a divisiones en cascada. 
 
-**Debilidades de la implementación:** Aunque el algoritmo implementado puede crecer, un de sus deventajas es que dejamos espacios libre al momento de eliminar un registro. Y si tenemos 100 registros y eliminamos 95% de ellos igual va quedar muchos buckets libres. Lo que podríamos mejorar sería es establecer un mínimo y cuando existan buckets semivacíos realizar la unión de bucktes. Esto garantizaría crecer(ahora lo hacemos) y decrecer(para una próxima presentación).
+**Debilidades de la implementación:** El índice hash implementado puede crecer, no obstante, una de sus deventajas es que dejamos espacios libre al momento de eliminar un registro. Y si tenemos 100 registros y eliminamos 95% de ellos igual va quedar muchos buckets libres. Lo que podríamos mejorar sería establecer un mínimo de buckets libres y cuando este límite se realizaría la unión de bucktes. Esto garantizaría crecer(ahora lo hacemos) y decrecer(para una próxima presentación). La implementación del árbol virtual podría ayudar(árbol patricia)
 
-**Resumen de tiempos de los métodos insert, delete, find**
-![img_7.png](img_7.png)
+---
+## **Resumen de tiempos de los métodos insert, delete, find**
+
+---
+
+<style>
+.summary-container {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 40px;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.summary-card {
+  background-color: #f5f5f5;
+  padding: 25px;
+  border-radius: 10px;
+  text-align: center;
+  width: 280px;
+}
+.summary-card .big-o {
+  font-size: 2.8em;
+  font-weight: bold;
+  font-family: monospace;
+  border: 4px solid #4a4a4a;
+  padding: 5px 20px;
+  display: inline-block;
+  margin-bottom: 15px;
+  background-color: white;
+}
+.summary-card .label {
+  font-size: 1.1em;
+  color: #333;
+  font-weight: bold;
+}
+</style>
+
+
+| Operación | Tiempo Promedio | Tiempo Peor | Espacio | Casos                  |
+|:----------|:---------------:|:-----------:|:-------:|:-----------------------|
+| Find      |     `O(1)`      |  `O(c+B)`   | `O(1)`  | Búsqueda directa       |
+| Insert    |     `O(1)`      |   `O(n)`    | `O(n)`  | Con split              |
+| Remove    |     `O(1)`      |  `O(c+B)`   | `O(1)`  | Búsqueda + eliminación |
+| Split     |     `O(n)`      |   `O(n)`    | `O(n)`  | Redistribución         |
+
+
+<div class="summary-container">
+  <div class="summary-card">
+    <div class="big-o">O(1)</div>
+    <div class="label">Promedio Find</div>
+  </div>
+  <div class="summary-card">
+    <div class="big-o">O(n)</div>
+    <div class="label">Peor Caso Insert</div>
+  </div>
+</div>
+
 ## 6.0 Conclusión
 
 Este informe ha analizado en detalle la implementación de la clase `ExtendibleHashingFile`, una solución robusta para la gestión de archivos dinámicos. La arquitectura, centrada en un directorio que se duplica y buckets que se dividen bajo demanda, demuestra una gestión eficaz del crecimiento de los datos, evitando las reorganizaciones completas del archivo que plagan a los sistemas de hashing estático.
