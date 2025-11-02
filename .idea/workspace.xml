@@ -5,18 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="c889c620-bb09-4650-8056-a80c65483e44" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/dictionaries/project.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/img.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_2.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_3.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_4.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_5.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_6.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_7.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_8.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/img_9.png" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/informeHashIndex.md" beforeDir="false" afterPath="$PROJECT_DIR$/informeHashIndex.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -45,7 +34,7 @@
     "git-widget-placeholder": "hi",
     "junie.onboarding.icon.badge.shown": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "/home/alissgian2030/PycharmProjects/bdii_project",
+    "last_opened_file_path": "/home/alissgian2030/PycharmProjects/c",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -77,7 +66,9 @@
       <workItem from="1760854695425" duration="69000" />
       <workItem from="1760900926559" duration="484000" />
       <workItem from="1760901413986" duration="7947000" />
-      <workItem from="1760913299782" duration="3282000" />
+      <workItem from="1760913299782" duration="6551000" />
+      <workItem from="1760928844733" duration="2381000" />
+      <workItem from="1760934290012" duration="39000" />
     </task>
     <servers />
   </component>
